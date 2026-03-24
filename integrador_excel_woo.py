@@ -13,15 +13,10 @@ URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
+COOKIE_FILE = "cookies.json"
+
 MAX_THREADS = 15
-INTERVALO = 300  # 5 minutos
-
-# ================= SKUS =================
-
-SKUS = [
-    "123.456.789",
-    "987.654.321"
-]
+INTERVALO = 300
 
 # ================= MAPAS =================
 
@@ -81,7 +76,7 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= FUNÇÕES =================
+# ================= UTIL =================
 
 def limpar_sku(sku):
     return re.sub(r"[^0-9.]", "", sku)
@@ -92,10 +87,48 @@ def montar_url_produto(sku):
         return None
     return f"{URL}/produto/detalhe/272/{p[0]}/{p[1]}/{p[2]}"
 
+# ================= SESSÃO =================
+
 def carregar_sessao():
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+    try:
+        cookies = json.load(open(COOKIE_FILE))
+        for c in cookies:
+            session.cookies.set(c["name"], c["value"])
+    except:
+        print("⚠️ cookies não carregados")
+
     return session
+
+# ================= BUSCAR SKUS =================
+
+def buscar_skus(session):
+    print("🔎 buscando SKUs...")
+
+    try:
+        r = session.get(f"{URL}/produto/listar/272", timeout=30)
+
+        if r.status_code != 200:
+            print("❌ erro ao buscar SKUs")
+            return []
+
+        data = r.json()
+
+        skus = []
+        for item in data.get("produtos", []):
+            if item.get("codigo"):
+                skus.append(str(item["codigo"]))
+
+        print(f"✅ {len(skus)} SKUs encontrados")
+        return skus
+
+    except Exception as e:
+        print("❌ erro SKUs:", e)
+        return []
+
+# ================= RESTO =================
 
 def carregar_categorias():
     cats = []
@@ -113,7 +146,6 @@ def carregar_categorias():
         cats.extend(data)
         page += 1
 
-    print(f"📂 categorias carregadas: {len(cats)}")
     return cats
 
 def carregar_produtos_woo():
@@ -134,7 +166,6 @@ def carregar_produtos_woo():
 
         page += 1
 
-    print(f"⚡ cache Woo: {len(produtos)} produtos")
     return produtos
 
 def pegar_produto(session, sku):
@@ -181,23 +212,24 @@ def enviar(produto, sku, categorias, cache):
     }
 
     if sku in cache:
-        r = requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-        print("♻️ update:", sku, r.status_code)
+        requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
     else:
-        r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        print("🆕 create:", sku, r.status_code)
+        requests.post(URL_WOO, auth=(CK, CS), json=payload)
+
+# ================= EXECUÇÃO =================
 
 def executar():
-    print("🚀 Iniciando ciclo...")
+    print("🚀 ciclo iniciado")
+
+    session = carregar_sessao()
 
     categorias = carregar_categorias()
     cache = carregar_produtos_woo()
 
-    def processar_sku(sku):
-        session = carregar_sessao()
+    skus = buscar_skus(session)
 
+    def processar(sku):
         sku = limpar_sku(sku)
-        print("🔎", sku)
 
         prod = pegar_produto(session, sku)
         if not prod:
@@ -209,9 +241,11 @@ def executar():
         enviar(prod, sku, categorias, cache)
 
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        executor.map(processar_sku, SKUS)
+        executor.map(processar, skus)
 
     print("✅ ciclo finalizado")
+
+# ================= LOOP =================
 
 while True:
     executar()
