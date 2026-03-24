@@ -1,11 +1,8 @@
-import pandas as pd
 import requests
 import time
 import json
-import os
 import re
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 # ================= CONFIG =================
 
@@ -16,10 +13,15 @@ URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-ARQUIVO = r"C:\Users\Rafa\Desktop\produtos.xlsx"
-COOKIE_FILE = "cookies.json"
-
 MAX_THREADS = 15
+INTERVALO = 300  # 5 minutos
+
+# ================= SKUS =================
+
+SKUS = [
+    "123.456.789",
+    "987.654.321"
+]
 
 # ================= MAPAS =================
 
@@ -38,9 +40,7 @@ MAPA_DEPARTAMENTOS = {
     1170000000: "DECORAÇÃO"
 }
 
-# 🔥 MAPA COMPLETO (seu final)
 MAPA_SUBDEPARTAMENTOS = {
-    # (mantive exatamente como você consolidou)
     1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
     1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
     1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
@@ -81,7 +81,7 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= UTIL =================
+# ================= FUNÇÕES =================
 
 def limpar_sku(sku):
     return re.sub(r"[^0-9.]", "", sku)
@@ -92,25 +92,10 @@ def montar_url_produto(sku):
         return None
     return f"{URL}/produto/detalhe/272/{p[0]}/{p[1]}/{p[2]}"
 
-def produto_bloqueado(txt):
-    if not txt:
-        return False
-    txt = txt.upper()
-    return bool(re.search(r'\bMM\b|\bBEM\s+MM\b', txt))
-
-# ================= SESSÃO =================
-
 def carregar_sessao():
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
-
-    cookies = json.load(open(COOKIE_FILE))
-    for c in cookies:
-        session.cookies.set(c["name"], c["value"])
-
     return session
-
-# ================= CATEGORIAS =================
 
 def carregar_categorias():
     cats = []
@@ -130,8 +115,6 @@ def carregar_categorias():
 
     print(f"📂 categorias carregadas: {len(cats)}")
     return cats
-
-# ================= CACHE WOO =================
 
 def carregar_produtos_woo():
     produtos = {}
@@ -154,8 +137,6 @@ def carregar_produtos_woo():
     print(f"⚡ cache Woo: {len(produtos)} produtos")
     return produtos
 
-# ================= PRODUTO =================
-
 def pegar_produto(session, sku):
     try:
         url = montar_url_produto(sku)
@@ -172,14 +153,11 @@ def pegar_produto(session, sku):
 
         p = data["itens"][0]
 
-        if produto_bloqueado(p["produto"]) or produto_bloqueado(p["descricaotecnica"]):
-            return None
-
         return {
             "name": p["produto"],
             "price": f"{float(p['precovenda']):.2f}",
             "stock": int(p["saldo"]),
-            "description": p["descricaotecnica"] or "",
+            "description": p.get("descricaotecnica", ""),
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
             "dep": p["iddepartamento"],
             "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None
@@ -189,122 +167,52 @@ def pegar_produto(session, sku):
         print("❌ erro produto:", sku, e)
         return None
 
-# ================= WOO =================
-
-def zerar_estoque(sku, cache):
-    if sku not in cache:
-        return
-
-    r = requests.put(
-        f"{URL_WOO}/{cache[sku]}",
-        auth=(CK, CS),
-        json={"stock_quantity": 0, "stock_status": "outofstock"}
-    )
-
-    print("⚡ zerado:", sku, r.status_code)
-
-
 def enviar(produto, sku, categorias, cache):
-    try:
-        nome_dep = MAPA_DEPARTAMENTOS.get(produto["dep"])
-        sub_nome = MAPA_SUBDEPARTAMENTOS.get(produto["subdep"])
+    payload = {
+        "name": produto["name"],
+        "regular_price": produto["price"],
+        "sku": sku,
+        "stock_quantity": produto["stock"],
+        "manage_stock": True,
+        "stock_status": "instock",
+        "description": produto["description"],
+        "images": produto["images"],
+        "categories": []
+    }
 
-        # ===== DEP =====
-        dep_id = None
-        for c in categorias:
-            if c["name"].strip().upper() == nome_dep.upper() and c["parent"] == 0:
-                dep_id = c["id"]
-                break
+    if sku in cache:
+        r = requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+        print("♻️ update:", sku, r.status_code)
+    else:
+        r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
+        print("🆕 create:", sku, r.status_code)
 
-        if not dep_id:
-            print("❌ dep não existe:", nome_dep)
+def executar():
+    print("🚀 Iniciando ciclo...")
+
+    categorias = carregar_categorias()
+    cache = carregar_produtos_woo()
+
+    def processar_sku(sku):
+        session = carregar_sessao()
+
+        sku = limpar_sku(sku)
+        print("🔎", sku)
+
+        prod = pegar_produto(session, sku)
+        if not prod:
             return
 
-        categoria_ids = [{"id": dep_id}]
+        if prod["stock"] == 0:
+            return
 
-        # ===== SUB =====
-        if sub_nome:
-            sub_id = None
+        enviar(prod, sku, categorias, cache)
 
-            for c in categorias:
-                if (
-                    c["name"].strip().upper() == sub_nome.upper()
-                    and c["parent"] == dep_id
-                ):
-                    sub_id = c["id"]
-                    break
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        executor.map(processar_sku, SKUS)
 
-            if not sub_id:
-                print("📁 criando sub:", sub_nome)
+    print("✅ ciclo finalizado")
 
-                r = requests.post(
-                    URL_CAT,
-                    auth=(CK, CS),
-                    json={"name": sub_nome, "parent": dep_id}
-                )
-
-                if r.status_code == 201:
-                    nova = r.json()
-                    sub_id = nova["id"]
-                    categorias.append(nova)
-
-            if sub_id:
-                categoria_ids.append({"id": sub_id})
-
-        payload = {
-            "name": produto["name"],
-            "regular_price": produto["price"],
-            "sku": sku,
-            "stock_quantity": produto["stock"],
-            "manage_stock": True,
-            "stock_status": "instock",
-            "description": produto["description"],
-            "images": produto["images"],
-            "categories": categoria_ids
-        }
-
-        if sku in cache:
-            r = requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-            print("♻️ update:", sku, r.status_code)
-        else:
-            r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
-            print("🆕 create:", sku, r.status_code)
-
-    except Exception as e:
-        print("❌ erro envio:", sku, e)
-
-# ================= PROCESSAMENTO =================
-
-def processar(row, categorias, cache):
-    session = carregar_sessao()
-
-    sku = limpar_sku(str(row["SKU"]))
-    print("🔎", sku)
-
-    prod = pegar_produto(session, sku)
-    if not prod:
-        return
-
-    if prod["stock"] == 0:
-        zerar_estoque(sku, cache)
-        return
-
-    enviar(prod, sku, categorias, cache)
-
-# ================= EXECUÇÃO =================
-
-categorias = carregar_categorias()
-cache = carregar_produtos_woo()
-
-df = pd.read_excel(ARQUIVO)
-
-with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-    futures = [
-        executor.submit(processar, row, categorias, cache)
-        for _, row in df.iterrows()
-    ]
-
-    for _ in as_completed(futures):
-        pass
-
-print("✅ FINALIZADO")
+while True:
+    executar()
+    time.sleep(INTERVALO)
