@@ -1,0 +1,22 @@
+[
+  {
+    "domain": ".juntossomosimbativeis.com.br",
+    "expiry": 1779567595,
+    "httpOnly": false,
+    "name": "AdoptVisitorId",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "EYQwbAJgrAjCAsBaAzADgKYHZH3gThEWEwgAZEIZ50QJNjM9Ug=="
+  },
+  {
+    "domain": ".juntossomosimbativeis.com.br",
+    "expiry": 1779567597,
+    "httpOnly": false,
+    "name": "AdoptConsent",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "N4Ig7gpgRgzglgFwgSQCIgFwgCYA5sCcADBIQLQCGRBAZmQCwCsAzAOxlRE2NlsDGBRrlwA2CLmIgANCABuceAgD2AJ2TZMIKBRHZGARgr1euCO3r0CFDq2xEy2ffQgVsrKK1YFc0kAj40AMoIKnAAdgDmmGEArgA2cTJKAA4IyGEAKhQRMJgA2iAAYmSsAHKBYVAA4gBeCL4AtgCOpQAaVQCCMIEAmiIgALpJqQDyMQhZOflDIHxKYTAQYWkaWBEASuvYAFLrvnMLSwgAahAq8POYRDIxydgUSNgd9VgATESvImREzGSv9Bl3hh9AQMIxWAA6fREfQALRAAF8gA"
+  }
+]
