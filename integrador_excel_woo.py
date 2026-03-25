@@ -3,10 +3,13 @@ import time
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from bs4 import BeautifulSoup
 
 # ================= CONFIG =================
 
 URL = "https://portal.juntossomosimbativeis.com.br"
+URL_LISTAGEM = "https://portal.juntossomosimbativeis.com.br/produto/listar/272"
+
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
@@ -14,7 +17,7 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
 
-MAX_THREADS = 10
+MAX_THREADS = 5
 INTERVALO = 300
 
 # ================= UTIL =================
@@ -34,7 +37,6 @@ def carregar_sessao():
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json, text/plain, */*"
     })
 
     try:
@@ -47,24 +49,42 @@ def carregar_sessao():
 
     return session
 
-# ================= GERAR SKUS =================
+# ================= SCRAPING =================
 
-def gerar_skus():
-    print("🔎 gerando SKUs automaticamente...")
+def buscar_skus_scraping(session):
+    print("🔎 buscando SKUs via scraping...")
 
-    skus = []
+    skus = set()
 
-    for a in range(300, 360):   # ajuste conforme fornecedor
-        for b in range(1, 20):
-            for c in range(0, 5):
+    try:
+        r = session.get(URL_LISTAGEM, timeout=30)
 
-                sku = f"{a}.{b}.{c}"
-                skus.append(sku)
+        print("STATUS LISTAGEM:", r.status_code)
 
-    print(f"⚡ {len(skus)} SKUs gerados")
-    return skus
+        soup = BeautifulSoup(r.text, "html.parser")
 
-# ================= PEGAR PRODUTO =================
+        links = soup.find_all("a", href=True)
+
+        for link in links:
+            href = link["href"]
+
+            if "/produto/detalhe/" in href:
+                partes = href.split("/")
+
+                try:
+                    sku = f"{partes[-3]}.{partes[-2]}.{partes[-1]}"
+                    skus.add(sku)
+                except:
+                    pass
+
+        print(f"✅ {len(skus)} SKUs encontrados")
+        return list(skus)
+
+    except Exception as e:
+        print("❌ erro scraping:", e)
+        return []
+
+# ================= PRODUTO =================
 
 def pegar_produto(session, sku):
     try:
@@ -149,13 +169,21 @@ def executar():
 
     session = carregar_sessao()
 
+    print("➡️ carregando produtos Woo...")
     cache = carregar_produtos_woo()
+    print(f"✅ {len(cache)} produtos no Woo")
 
-    skus = gerar_skus()
+    skus = buscar_skus_scraping(session)
 
-    print(f"🔥 testando {len(skus)} SKUs")
+    if not skus:
+        print("❌ nenhum SKU encontrado")
+        return
+
+    print(f"🔥 processando {len(skus)} SKUs")
 
     def processar(sku):
+        print("🔎 SKU:", sku)
+
         sku = limpar_sku(sku)
 
         prod = pegar_produto(session, sku)
