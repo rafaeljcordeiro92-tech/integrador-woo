@@ -144,31 +144,19 @@ def sessao():
 
     return s
 
-# ================= BUSCAR SKUS =================
+# ================= GERAR SKUS =================
 
-def buscar_skus(session):
-    print("🔎 buscando SKUs...")
+def gerar_skus():
+    print("🧠 gerando SKUs...")
 
-    try:
-        r = session.get(f"{URL}/produto/listar/272", timeout=30)
+    skus = []
+    for a in range(200, 800):
+        for b in range(1, 15):
+            for c in range(0, 3):
+                skus.append(f"{a}.{b}.{c}")
 
-        if r.status_code != 200:
-            print("❌ erro ao buscar SKUs")
-            return []
-
-        data = r.json()
-
-        skus = []
-        for item in data.get("produtos", []):
-            if item.get("codigo"):
-                skus.append(str(item["codigo"]))
-
-        print(f"✅ {len(skus)} SKUs encontrados")
-        return skus
-
-    except Exception as e:
-        print("❌ erro SKUs:", e)
-        return []
+    print(f"⚡ {len(skus)} SKUs gerados")
+    return skus
 
 # ================= WOO =================
 
@@ -298,13 +286,7 @@ def executar():
     cache = get_produtos()
     cats = get_categorias()
 
-    print(f"📦 {len(cache)} produtos no Woo")
-
-    skus = buscar_skus(s)
-
-    if not skus:
-        print("❌ nenhum SKU encontrado")
-        return
+    skus = gerar_skus()
 
     for sku in skus[:SKUS_POR_CICLO]:
         prod = pegar(s, sku)
