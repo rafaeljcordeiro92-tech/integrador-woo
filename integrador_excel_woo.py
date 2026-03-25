@@ -293,7 +293,3 @@ def executar():
     log("✅ ciclo finalizado")
 
 # ================= LOOP =================
-
-while True:
-    executar()
-    time.sleep(INTERVALO)
