@@ -48,11 +48,17 @@ def produto_bloqueado(prod):
 
     texto = f"{nome} {desc}"
 
-    if re.search(r"\bBEM\s+MM\b", texto):
+    # separa palavras reais corretamente
+    palavras = re.findall(r'\b\w+\b', texto)
+
+    # BLOQUEIA se tiver "MM" sozinho
+    if "MM" in palavras:
         return True
 
-    if re.search(r"\bMM\b", texto):
-        return True
+    # BLOQUEIA se tiver "BEM MM"
+    for i in range(len(palavras) - 1):
+        if palavras[i] == "BEM" and palavras[i + 1] == "MM":
+            return True
 
     return False
 
