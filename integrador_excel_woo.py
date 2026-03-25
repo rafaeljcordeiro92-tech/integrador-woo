@@ -15,66 +15,8 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
 
-MAX_THREADS = 15
+MAX_THREADS = 10
 INTERVALO = 300
-
-# ================= MAPAS =================
-
-MAPA_DEPARTAMENTOS = {
-    1010000000: "ELETRO",
-    1020000000: "MÓVEIS",
-    1050000000: "ESPORTE E LAZER",
-    1030000000: "INFORMÁTICA",
-    1040000000: "TELEF. CELULAR",
-    1060000000: "UTILIDADES",
-    1080000000: "CAMA, MESA E BANHO",
-    1090000000: "TAPETES",
-    1150000000: "LINHA AUTOMOTIVA",
-    1180000000: "LINHA ALTA",
-    1190000000: "COLCHÕES",
-    1170000000: "DECORAÇÃO"
-}
-
-MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS E CENTRÍFUGAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-
-    1181020000: "COPA",
-
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-    1021110000: "MÓVEIS QUARTO - DIVERSOS", 1023050000: "NICHO",
-    1023030000: "PANELEIROS", 1022040000: "RACKS", 1023100000: "TAMPOS",
-
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-
-    1081010000: "CAMA",
-
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
-}
 
 # ================= UTIL =================
 
@@ -91,30 +33,50 @@ def montar_url_produto(sku):
 
 def carregar_sessao():
     session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*"
+    })
 
     try:
         cookies = json.load(open(COOKIE_FILE))
         for c in cookies:
             session.cookies.set(c["name"], c["value"])
+        print("✅ cookies carregados")
     except:
         print("⚠️ cookies não carregados")
 
     return session
 
-# ================= BUSCAR SKUS =================
+# ================= DEBUG SKUS =================
 
 def buscar_skus(session):
     print("🔎 buscando SKUs...")
 
     try:
-        r = session.get(f"{URL}/produto/listar/272", timeout=30)
+        url = f"{URL}/produto/listar/272"
+        r = session.get(url, timeout=30)
 
-        if r.status_code != 200:
-            print("❌ erro ao buscar SKUs")
+        print("STATUS:", r.status_code)
+        print("CONTENT-TYPE:", r.headers.get("content-type"))
+
+        print("\n--- RESPOSTA (INÍCIO) ---")
+        print(r.text[:500])
+        print("--- FIM ---\n")
+
+        if "html" in r.headers.get("content-type", ""):
+            print("❌ RETORNOU HTML → LOGIN FALHOU")
             return []
 
-        data = r.json()
+        try:
+            data = r.json()
+        except:
+            print("❌ NÃO É JSON VÁLIDO")
+            return []
+
+        if "produtos" not in data:
+            print("⚠️ JSON não contém 'produtos'")
+            return []
 
         skus = []
         for item in data.get("produtos", []):
@@ -128,7 +90,7 @@ def buscar_skus(session):
         print("❌ erro SKUs:", e)
         return []
 
-# ================= RESTO =================
+# ================= WOO =================
 
 def carregar_categorias():
     cats = []
@@ -178,7 +140,11 @@ def pegar_produto(session, sku):
         if r.status_code != 200:
             return None
 
-        data = r.json()
+        try:
+            data = r.json()
+        except:
+            return None
+
         if not data.get("itens"):
             return None
 
@@ -190,15 +156,13 @@ def pegar_produto(session, sku):
             "stock": int(p["saldo"]),
             "description": p.get("descricaotecnica", ""),
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
-            "dep": p["iddepartamento"],
-            "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None
         }
 
     except Exception as e:
         print("❌ erro produto:", sku, e)
         return None
 
-def enviar(produto, sku, categorias, cache):
+def enviar(produto, sku, cache):
     payload = {
         "name": produto["name"],
         "regular_price": produto["price"],
@@ -208,18 +172,19 @@ def enviar(produto, sku, categorias, cache):
         "stock_status": "instock",
         "description": produto["description"],
         "images": produto["images"],
-        "categories": []
     }
 
     if sku in cache:
         requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+        print("♻️ update:", sku)
     else:
         requests.post(URL_WOO, auth=(CK, CS), json=payload)
+        print("🆕 create:", sku)
 
 # ================= EXECUÇÃO =================
 
 def executar():
-    print("🚀 ciclo iniciado")
+    print("\n🚀 ciclo iniciado")
 
     session = carregar_sessao()
 
@@ -227,6 +192,10 @@ def executar():
     cache = carregar_produtos_woo()
 
     skus = buscar_skus(session)
+
+    if not skus:
+        print("⚠️ nenhum SKU encontrado")
+        return
 
     def processar(sku):
         sku = limpar_sku(sku)
@@ -238,7 +207,7 @@ def executar():
         if prod["stock"] == 0:
             return
 
-        enviar(prod, sku, categorias, cache)
+        enviar(prod, sku, cache)
 
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         executor.map(processar, skus)
