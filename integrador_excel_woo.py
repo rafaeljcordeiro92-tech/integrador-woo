@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 URL = "https://portal.juntossomosimbativeis.com.br"
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
-URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
@@ -48,87 +47,24 @@ def carregar_sessao():
 
     return session
 
-# ================= DEBUG SKUS =================
+# ================= GERAR SKUS =================
 
-def buscar_skus(session):
-    print("🔎 buscando SKUs...")
+def gerar_skus():
+    print("🔎 gerando SKUs automaticamente...")
 
-    try:
-        url = f"{URL}/produto/listar/272"
-        r = session.get(url, timeout=30)
+    skus = []
 
-        print("STATUS:", r.status_code)
-        print("CONTENT-TYPE:", r.headers.get("content-type"))
+    for a in range(300, 360):   # ajuste conforme fornecedor
+        for b in range(1, 20):
+            for c in range(0, 5):
 
-        print("\n--- RESPOSTA (INÍCIO) ---")
-        print(r.text[:500])
-        print("--- FIM ---\n")
+                sku = f"{a}.{b}.{c}"
+                skus.append(sku)
 
-        if "html" in r.headers.get("content-type", ""):
-            print("❌ RETORNOU HTML → LOGIN FALHOU")
-            return []
+    print(f"⚡ {len(skus)} SKUs gerados")
+    return skus
 
-        try:
-            data = r.json()
-        except:
-            print("❌ NÃO É JSON VÁLIDO")
-            return []
-
-        if "produtos" not in data:
-            print("⚠️ JSON não contém 'produtos'")
-            return []
-
-        skus = []
-        for item in data.get("produtos", []):
-            if item.get("codigo"):
-                skus.append(str(item["codigo"]))
-
-        print(f"✅ {len(skus)} SKUs encontrados")
-        return skus
-
-    except Exception as e:
-        print("❌ erro SKUs:", e)
-        return []
-
-# ================= WOO =================
-
-def carregar_categorias():
-    cats = []
-    page = 1
-
-    while True:
-        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page": 100, "page": page})
-        if r.status_code != 200:
-            break
-
-        data = r.json()
-        if not data:
-            break
-
-        cats.extend(data)
-        page += 1
-
-    return cats
-
-def carregar_produtos_woo():
-    produtos = {}
-    page = 1
-
-    while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
-        if r.status_code != 200:
-            break
-
-        data = r.json()
-        if not data:
-            break
-
-        for p in data:
-            produtos[p["sku"]] = p["id"]
-
-        page += 1
-
-    return produtos
+# ================= PEGAR PRODUTO =================
 
 def pegar_produto(session, sku):
     try:
@@ -137,6 +73,7 @@ def pegar_produto(session, sku):
             return None
 
         r = session.get(url, timeout=15)
+
         if r.status_code != 200:
             return None
 
@@ -158,9 +95,30 @@ def pegar_produto(session, sku):
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
         }
 
-    except Exception as e:
-        print("❌ erro produto:", sku, e)
+    except:
         return None
+
+# ================= WOO =================
+
+def carregar_produtos_woo():
+    produtos = {}
+    page = 1
+
+    while True:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+        if r.status_code != 200:
+            break
+
+        data = r.json()
+        if not data:
+            break
+
+        for p in data:
+            produtos[p["sku"]] = p["id"]
+
+        page += 1
+
+    return produtos
 
 def enviar(produto, sku, cache):
     payload = {
@@ -174,12 +132,15 @@ def enviar(produto, sku, cache):
         "images": produto["images"],
     }
 
-    if sku in cache:
-        requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-        print("♻️ update:", sku)
-    else:
-        requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        print("🆕 create:", sku)
+    try:
+        if sku in cache:
+            requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+            print("♻️ update:", sku)
+        else:
+            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            print("🆕 create:", sku)
+    except:
+        print("❌ erro ao enviar:", sku)
 
 # ================= EXECUÇÃO =================
 
@@ -188,19 +149,17 @@ def executar():
 
     session = carregar_sessao()
 
-    categorias = carregar_categorias()
     cache = carregar_produtos_woo()
 
-    skus = buscar_skus(session)
+    skus = gerar_skus()
 
-    if not skus:
-        print("⚠️ nenhum SKU encontrado")
-        return
+    print(f"🔥 testando {len(skus)} SKUs")
 
     def processar(sku):
         sku = limpar_sku(sku)
 
         prod = pegar_produto(session, sku)
+
         if not prod:
             return
 
