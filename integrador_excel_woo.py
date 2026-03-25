@@ -2,6 +2,7 @@ import requests
 import time
 import json
 import random
+import re
 from datetime import datetime
 from stats import registrar_evento
 
@@ -34,6 +35,27 @@ def log(msg):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"{datetime.now()} - {msg}\n")
 
+# ================= SKU LIMPEZA =================
+
+def limpar_sku(sku):
+    return re.sub(r"[^0-9.]", "", str(sku)).strip()
+
+# ================= FILTRO MM CORRIGIDO =================
+
+def produto_bloqueado(prod):
+    nome = prod["name"].upper()
+    desc = prod["descricao"].upper()
+
+    texto = f"{nome} {desc}"
+
+    if re.search(r"\bBEM\s+MM\b", texto):
+        return True
+
+    if re.search(r"\bMM\b", texto):
+        return True
+
+    return False
+
 # ================= MAPAS =================
 
 MAPA_DEPARTAMENTOS = {
@@ -59,16 +81,11 @@ MAPA_SUBDEPARTAMENTOS = {
     1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
     1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
     1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-
     1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
     1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-
     1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-
     1181020000: "COPA",
-
     1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-
     1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
     1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
     1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
@@ -78,13 +95,9 @@ MAPA_SUBDEPARTAMENTOS = {
     1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
     1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
     1026010000: "LAVANDERIA", 1023110000: "MESA",
-
     1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-
     1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-
     1081010000: "CAMA",
-
     1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
     1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
@@ -118,7 +131,6 @@ def montar_url(sku):
 
 def sessao():
     s = requests.Session()
-
     try:
         cookies = json.load(open(COOKIE_FILE))
         for c in cookies:
@@ -126,7 +138,6 @@ def sessao():
         log("✅ cookies carregados")
     except:
         log("⚠️ cookies não carregados")
-
     return s
 
 # ================= WOO =================
@@ -134,48 +145,37 @@ def sessao():
 def get_produtos():
     produtos = {}
     page = 1
-
     while True:
         r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
         if r.status_code != 200:
             break
-
         data = r.json()
         if not data:
             break
-
         for p in data:
             produtos[p["sku"]] = p["id"]
-
         page += 1
-
     return produtos
 
 def get_categorias():
     cats = {}
     page = 1
-
     while True:
         r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page": 100, "page": page})
         if r.status_code != 200:
             break
-
         data = r.json()
         if not data:
             break
-
         for c in data:
             cats[c["name"]] = c["id"]
-
         page += 1
-
     return cats
 
 def criar_categoria(nome, parent=None):
     payload = {"name": nome}
     if parent:
         payload["parent"] = parent
-
     r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
     return r.json()["id"]
 
@@ -218,21 +218,18 @@ def enviar(prod, sku, cache, cats, cache_local):
 
     if dep_nome not in cats:
         cats[dep_nome] = criar_categoria(dep_nome)
-        log(f"📁 categoria criada: {dep_nome}")
 
     cat_id = cats[dep_nome]
 
     if sub_nome:
         if sub_nome not in cats:
             cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
-            log(f"📂 subcategoria criada: {sub_nome}")
         cat_id = cats[sub_nome]
 
     antigo = cache_local.get(sku)
 
     if antigo:
         if antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
-            log(f"⏭️ sem mudança: {sku}")
             return
 
     payload = {
@@ -279,15 +276,22 @@ def executar():
     cats = get_categorias()
     cache_local = carregar_cache_local()
 
-    log(f"📦 {len(cache)} produtos no Woo")
-
     skus = list(cache.keys())
     random.shuffle(skus)
 
     for sku in skus[:SKUS_POR_CICLO]:
+
+        sku = limpar_sku(sku)
+
         prod = pegar(s, sku)
-        if prod:
-            enviar(prod, sku, cache, cats, cache_local)
+        if not prod:
+            continue
+
+        if produto_bloqueado(prod):
+            log(f"🚫 bloqueado (MM isolado): {sku} - {prod['name']}")
+            continue
+
+        enviar(prod, sku, cache, cats, cache_local)
 
     salvar_cache_local(cache_local)
 

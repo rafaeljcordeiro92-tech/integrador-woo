@@ -1,21 +1,52 @@
 from flask import Flask, render_template_string, redirect
 import threading
 import time
+from datetime import datetime
 from integrador_excel_woo import executar
 from stats import carregar_stats
 
 app = Flask(__name__)
+
+ultima_execucao = None
+proxima_execucao = None
+status = "Iniciando..."
+
+INTERVALO = 1200  # 20 min
 
 HTML = """
 <html>
 <head>
 <title>Painel ERP</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+function atualizarContador() {
+    const proxima = new Date("{{proxima_execucao}}").getTime();
+
+    setInterval(() => {
+        const agora = new Date().getTime();
+        const diff = proxima - agora;
+
+        if (diff > 0) {
+            const min = Math.floor(diff / 60000);
+            const sec = Math.floor((diff % 60000) / 1000);
+            document.getElementById("contador").innerText = min + "m " + sec + "s";
+        } else {
+            document.getElementById("contador").innerText = "Executando...";
+        }
+    }, 1000);
+}
+</script>
+
 </head>
 
-<body style="font-family:Arial;background:#0f172a;color:white;padding:20px">
+<body onload="atualizarContador()" style="font-family:Arial;background:#0f172a;color:white;padding:20px">
 
 <h1>🚀 Painel ERP Integrador</h1>
+
+<p><b>Status:</b> {{status}}</p>
+<p><b>Última execução:</b> {{ultima_execucao}}</p>
+<p><b>Próxima execução em:</b> <span id="contador">--</span></p>
 
 <div style="display:flex;gap:20px">
 
@@ -74,9 +105,18 @@ data: data
 # ================= LOOP =================
 
 def loop():
+    global ultima_execucao, proxima_execucao, status
+
     while True:
+        status = "Executando..."
+        ultima_execucao = datetime.now()
+
         executar()
-        time.sleep(1200)
+
+        status = "Aguardando próxima execução"
+        proxima_execucao = datetime.now().timestamp() + INTERVALO
+
+        time.sleep(INTERVALO)
 
 threading.Thread(target=loop, daemon=True).start()
 
@@ -101,7 +141,10 @@ def home():
         erros=stats["erros"],
         logs=logs,
         labels=labels,
-        valores=valores
+        valores=valores,
+        status=status,
+        ultima_execucao=ultima_execucao,
+        proxima_execucao=datetime.fromtimestamp(proxima_execucao).isoformat() if proxima_execucao else ""
     )
 
 @app.route("/rodar", methods=["POST"])
