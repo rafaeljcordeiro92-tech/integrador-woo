@@ -3,19 +3,17 @@ import time
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from bs4 import BeautifulSoup
 
 # ================= CONFIG =================
 
 URL = "https://portal.juntossomosimbativeis.com.br"
-URL_LISTAGEM = "https://portal.juntossomosimbativeis.com.br/produto/listar/272"
-
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
+SKU_FILE = "skus_validos.json"
 
 MAX_THREADS = 5
 INTERVALO = 300
@@ -37,6 +35,7 @@ def carregar_sessao():
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*"
     })
 
     try:
@@ -49,40 +48,41 @@ def carregar_sessao():
 
     return session
 
-# ================= SCRAPING =================
+# ================= CACHE SKU =================
 
-def buscar_skus_scraping(session):
-    print("🔎 buscando SKUs via scraping...")
-
-    skus = set()
-
+def carregar_skus_salvos():
     try:
-        r = session.get(URL_LISTAGEM, timeout=30)
-
-        print("STATUS LISTAGEM:", r.status_code)
-
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        links = soup.find_all("a", href=True)
-
-        for link in links:
-            href = link["href"]
-
-            if "/produto/detalhe/" in href:
-                partes = href.split("/")
-
-                try:
-                    sku = f"{partes[-3]}.{partes[-2]}.{partes[-1]}"
-                    skus.add(sku)
-                except:
-                    pass
-
-        print(f"✅ {len(skus)} SKUs encontrados")
-        return list(skus)
-
-    except Exception as e:
-        print("❌ erro scraping:", e)
+        with open(SKU_FILE, "r") as f:
+            return json.load(f)
+    except:
         return []
+
+def salvar_skus(skus):
+    with open(SKU_FILE, "w") as f:
+        json.dump(list(set(skus)), f, indent=2)
+
+# ================= GERADOR =================
+
+def gerar_skus_base():
+    skus = []
+
+    for a in range(300, 360):
+        for b in range(1, 20):
+            for c in range(0, 10):
+                skus.append(f"{a}.{b}.{c}")
+
+    return skus
+
+def preparar_skus():
+    salvos = carregar_skus_salvos()
+    gerados = gerar_skus_base()
+
+    novos = list(set(gerados) - set(salvos))
+
+    print(f"🧠 {len(salvos)} SKUs já conhecidos")
+    print(f"🆕 {len(novos)} SKUs novos")
+
+    return novos, salvos
 
 # ================= PRODUTO =================
 
@@ -126,6 +126,7 @@ def carregar_produtos_woo():
 
     while True:
         r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+
         if r.status_code != 200:
             break
 
@@ -169,21 +170,14 @@ def executar():
 
     session = carregar_sessao()
 
-    print("➡️ carregando produtos Woo...")
     cache = carregar_produtos_woo()
-    print(f"✅ {len(cache)} produtos no Woo")
+    print(f"📦 {len(cache)} produtos no Woo")
 
-    skus = buscar_skus_scraping(session)
+    novos_skus, skus_salvos = preparar_skus()
 
-    if not skus:
-        print("❌ nenhum SKU encontrado")
-        return
-
-    print(f"🔥 processando {len(skus)} SKUs")
+    validos = []
 
     def processar(sku):
-        print("🔎 SKU:", sku)
-
         sku = limpar_sku(sku)
 
         prod = pegar_produto(session, sku)
@@ -194,11 +188,16 @@ def executar():
         if prod["stock"] == 0:
             return
 
+        validos.append(sku)
         enviar(prod, sku, cache)
 
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        executor.map(processar, skus)
+        executor.map(processar, novos_skus)
 
+    todos = skus_salvos + validos
+    salvar_skus(todos)
+
+    print(f"💾 {len(validos)} novos SKUs salvos")
     print("✅ ciclo finalizado")
 
 # ================= LOOP =================
