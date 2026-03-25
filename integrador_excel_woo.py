@@ -3,8 +3,6 @@ import time
 import json
 import re
 import random
-import psycopg2
-import os
 from datetime import datetime
 
 # ================= CONFIG =================
@@ -13,19 +11,21 @@ URL = "https://portal.juntossomosimbativeis.com.br"
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
-CK = os.getenv("CK")
-CS = os.getenv("CS")
+CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
+CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
 
 INTERVALO = 1200
-SKUS_POR_CICLO = 200
+SKUS_POR_CICLO = 150
 
 DELAY_MIN = 1.0
 DELAY_MAX = 2.5
 
 HORA_INICIO = 8
 HORA_FIM = 22
+
+CACHE_FILE = "cache_local.json"
 
 # ================= MAPAS =================
 
@@ -83,34 +83,16 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= BANCO =================
+# ================= CACHE =================
 
-def conectar_db():
-    return psycopg2.connect(
-        host=os.getenv("PGHOST"),
-        database=os.getenv("PGDATABASE"),
-        user=os.getenv("PGUSER"),
-        password=os.getenv("PGPASSWORD"),
-        port=os.getenv("PGPORT")
-    )
+def carregar_cache_local():
+    try:
+        return json.load(open(CACHE_FILE))
+    except:
+        return {}
 
-def salvar_produto(sku, nome, preco, estoque):
-    conn = conectar_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO produtos (sku, nome, preco, estoque)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (sku)
-        DO UPDATE SET
-            preco = EXCLUDED.preco,
-            estoque = EXCLUDED.estoque,
-            ultima_atualizacao = NOW()
-    """, (sku, nome, preco, estoque))
-
-    conn.commit()
-    cur.close()
-    conn.close()
+def salvar_cache_local(cache):
+    json.dump(cache, open(CACHE_FILE, "w"))
 
 # ================= UTIL =================
 
@@ -131,7 +113,9 @@ def sessao():
     s = requests.Session()
 
     s.headers.update({
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Connection": "keep-alive"
     })
 
     try:
@@ -143,20 +127,6 @@ def sessao():
         print("⚠️ cookies não carregados")
 
     return s
-
-# ================= GERAR SKUS =================
-
-def gerar_skus():
-    print("🧠 gerando SKUs...")
-
-    skus = []
-    for a in range(200, 800):
-        for b in range(1, 15):
-            for c in range(0, 3):
-                skus.append(f"{a}.{b}.{c}")
-
-    print(f"⚡ {len(skus)} SKUs gerados")
-    return skus
 
 # ================= WOO =================
 
@@ -232,16 +202,19 @@ def pegar(session, sku):
             "name": p["produto"],
             "price": str(round(float(p["precovenda"]), 2)),
             "stock": int(p["saldo"]),
+            "descricao": p.get("descricaotecnica", ""),
             "dep": p["iddepartamento"],
-            "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None
+            "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None,
+            "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
         }
 
-    except:
+    except Exception as e:
+        print("❌ erro produto:", sku, e)
         return None
 
 # ================= ENVIO =================
 
-def enviar(prod, sku, cache, cats):
+def enviar(prod, sku, cache, cats, cache_local):
     dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
     sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"], None)
 
@@ -255,6 +228,13 @@ def enviar(prod, sku, cache, cats):
             cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
         cat_id = cats[sub_nome]
 
+    antigo = cache_local.get(sku)
+
+    if antigo:
+        if antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
+            print(f"⏭️ sem mudança: {sku}")
+            return
+
     payload = {
         "name": prod["name"],
         "regular_price": prod["price"],
@@ -262,16 +242,60 @@ def enviar(prod, sku, cache, cats):
         "stock_quantity": prod["stock"],
         "manage_stock": True,
         "categories": [{"id": cat_id}],
+        "images": prod["images"],
+        "description": prod["descricao"],
     }
 
     print(f"💰 {sku} | R${prod['price']} | estoque {prod['stock']}")
 
-    salvar_produto(sku, prod["name"], prod["price"], prod["stock"])
-
     if sku in cache:
         requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+        print("♻️ update:", sku)
     else:
         requests.post(URL_WOO, auth=(CK, CS), json=payload)
+        print("🆕 create:", sku)
+
+    cache_local[sku] = {
+        "price": prod["price"],
+        "stock": prod["stock"]
+    }
+
+# ================= PROCESSOS =================
+
+def atualizar_existentes(session, cache, cats, cache_local):
+    print("🔄 atualização inteligente...")
+
+    skus = list(cache.keys())
+    random.shuffle(skus)
+
+    for sku in skus[:SKUS_POR_CICLO]:
+        prod = pegar(session, sku)
+        if prod:
+            enviar(prod, sku, cache, cats, cache_local)
+
+def descobrir_novos(session, cache, cats, cache_local):
+    print("🧠 descoberta leve...")
+
+    encontrados = 0
+
+    for a in range(300, 360):
+        for b in range(1, 6):
+
+            sku = f"{a}.{b}.0"
+
+            if sku in cache:
+                continue
+
+            prod = pegar(session, sku)
+            if not prod:
+                continue
+
+            enviar(prod, sku, cache, cats, cache_local)
+            encontrados += 1
+
+            if encontrados >= 5:
+                print("🛑 limite leve atingido")
+                return
 
 # ================= EXECUÇÃO =================
 
@@ -285,13 +309,14 @@ def executar():
     s = sessao()
     cache = get_produtos()
     cats = get_categorias()
+    cache_local = carregar_cache_local()
 
-    skus = gerar_skus()
+    print(f"📦 {len(cache)} produtos no Woo")
 
-    for sku in skus[:SKUS_POR_CICLO]:
-        prod = pegar(s, sku)
-        if prod:
-            enviar(prod, sku, cache, cats)
+    atualizar_existentes(s, cache, cats, cache_local)
+    descobrir_novos(s, cache, cats, cache_local)
+
+    salvar_cache_local(cache_local)
 
     print("✅ ciclo finalizado")
 
