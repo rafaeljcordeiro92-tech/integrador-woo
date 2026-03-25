@@ -3,6 +3,7 @@ import time
 import json
 import random
 from datetime import datetime
+from stats import registrar_evento
 
 # ================= CONFIG =================
 
@@ -30,11 +31,8 @@ CACHE_FILE = "cache_local.json"
 
 def log(msg):
     print(msg)
-    try:
-        with open("log.txt", "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now()} - {msg}\n")
-    except:
-        pass
+    with open("log.txt", "a", encoding="utf-8") as f:
+        f.write(f"{datetime.now()} - {msg}\n")
 
 # ================= MAPAS =================
 
@@ -207,7 +205,9 @@ def pegar(session, sku):
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
         }
 
-    except:
+    except Exception as e:
+        log(f"❌ erro produto {sku}: {e}")
+        registrar_evento("erros")
         return None
 
 # ================= ENVIO =================
@@ -235,12 +235,6 @@ def enviar(prod, sku, cache, cats, cache_local):
             log(f"⏭️ sem mudança: {sku}")
             return
 
-        if antigo["price"] != prod["price"]:
-            log(f"💲 preço mudou: {sku} {antigo['price']} → {prod['price']}")
-
-        if antigo["stock"] != prod["stock"]:
-            log(f"📦 estoque mudou: {sku} {antigo['stock']} → {prod['stock']}")
-
     payload = {
         "name": prod["name"],
         "regular_price": prod["price"],
@@ -252,12 +246,19 @@ def enviar(prod, sku, cache, cats, cache_local):
         "description": prod["descricao"],
     }
 
-    if sku in cache:
-        requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-        log(f"♻️ update: {sku}")
-    else:
-        requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        log(f"🆕 create: {sku}")
+    try:
+        if sku in cache:
+            requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+            log(f"♻️ update: {sku}")
+            registrar_evento("updates")
+        else:
+            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            log(f"🆕 create: {sku}")
+            registrar_evento("novos")
+
+    except Exception as e:
+        log(f"❌ erro envio: {sku} - {e}")
+        registrar_evento("erros")
 
     cache_local[sku] = {
         "price": prod["price"],
@@ -291,5 +292,3 @@ def executar():
     salvar_cache_local(cache_local)
 
     log("✅ ciclo finalizado")
-
-# ================= LOOP =================

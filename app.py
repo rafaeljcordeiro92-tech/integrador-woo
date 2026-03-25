@@ -1,41 +1,45 @@
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, redirect
 import threading
 import time
-from datetime import datetime
-
-# IMPORTA SEU SCRIPT
 from integrador_excel_woo import executar
+from stats import carregar_stats
 
 app = Flask(__name__)
 
-HTML = """
-<h2>📊 Painel Integrador</h2>
+HTML = """... (mantém o HTML que te mandei antes) ..."""
 
-<p>Status: Online 🚀</p>
-<p>Última atualização: {{hora}}</p>
-
-<h3>Logs:</h3>
-<pre style="background:#111;color:#0f0;padding:10px;height:400px;overflow:auto;">
-{{logs}}
-</pre>
-"""
-
-def loop_integrador():
+def loop():
     while True:
         executar()
         time.sleep(1200)
 
+threading.Thread(target=loop, daemon=True).start()
+
 @app.route("/")
 def home():
+    stats = carregar_stats()
+
     try:
-        with open("log.txt", "r", encoding="utf-8") as f:
-            logs = f.read()[-8000:]
+        logs = open("log.txt").read()[-8000:]
     except:
-        logs = "Sem logs ainda"
+        logs = "Sem logs"
 
-    return render_template_string(HTML, logs=logs, hora=datetime.now())
+    labels = [h["hora"] for h in stats["historico"]]
+    valores = list(range(len(labels)))
 
-# THREAD DO INTEGRADOR
-threading.Thread(target=loop_integrador, daemon=True).start()
+    return render_template_string(
+        HTML,
+        updates=stats["updates"],
+        novos=stats["novos"],
+        erros=stats["erros"],
+        logs=logs,
+        labels=labels,
+        valores=valores
+    )
+
+@app.route("/rodar", methods=["POST"])
+def rodar():
+    threading.Thread(target=executar).start()
+    return redirect("/")
 
 app.run(host="0.0.0.0", port=3000)
