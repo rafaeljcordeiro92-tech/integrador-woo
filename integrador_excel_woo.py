@@ -19,7 +19,7 @@ CS = os.getenv("CS")
 COOKIE_FILE = "cookies.json"
 
 INTERVALO = 1200
-SKUS_POR_CICLO = 150
+SKUS_POR_CICLO = 200
 
 DELAY_MIN = 1.0
 DELAY_MAX = 2.5
@@ -131,8 +131,7 @@ def sessao():
     s = requests.Session()
 
     s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Connection": "keep-alive"
+        "User-Agent": "Mozilla/5.0"
     })
 
     try:
@@ -144,6 +143,32 @@ def sessao():
         print("⚠️ cookies não carregados")
 
     return s
+
+# ================= BUSCAR SKUS =================
+
+def buscar_skus(session):
+    print("🔎 buscando SKUs...")
+
+    try:
+        r = session.get(f"{URL}/produto/listar/272", timeout=30)
+
+        if r.status_code != 200:
+            print("❌ erro ao buscar SKUs")
+            return []
+
+        data = r.json()
+
+        skus = []
+        for item in data.get("produtos", []):
+            if item.get("codigo"):
+                skus.append(str(item["codigo"]))
+
+        print(f"✅ {len(skus)} SKUs encontrados")
+        return skus
+
+    except Exception as e:
+        print("❌ erro SKUs:", e)
+        return []
 
 # ================= WOO =================
 
@@ -273,7 +298,15 @@ def executar():
     cache = get_produtos()
     cats = get_categorias()
 
-    for sku in list(cache.keys())[:SKUS_POR_CICLO]:
+    print(f"📦 {len(cache)} produtos no Woo")
+
+    skus = buscar_skus(s)
+
+    if not skus:
+        print("❌ nenhum SKU encontrado")
+        return
+
+    for sku in skus[:SKUS_POR_CICLO]:
         prod = pegar(s, sku)
         if prod:
             enviar(prod, sku, cache, cats)
