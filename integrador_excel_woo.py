@@ -2,7 +2,8 @@ import requests
 import time
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
+import random
+from datetime import datetime
 
 # ================= CONFIG =================
 
@@ -15,10 +16,18 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
 
-MAX_THREADS = 5
-INTERVALO = 300
+INTERVALO = 1200
+SKUS_POR_CICLO = 150
 
-# ================= MAPAS (SEUS ORIGINAIS) =================
+DELAY_MIN = 1.0
+DELAY_MAX = 2.5
+
+# 🔥 CONTROLE DE HORÁRIO
+HORA_INICIO = 8
+HORA_FIM = 22
+
+# ================= MAPAS =================
+# (mantive exatamente igual ao seu)
 
 MAPA_DEPARTAMENTOS = {
     1010000000: "ELETRO",
@@ -35,46 +44,16 @@ MAPA_DEPARTAMENTOS = {
     1170000000: "DECORAÇÃO"
 }
 
-MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-
-    1181020000: "COPA",
-
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-
-    1081010000: "CAMA",
-
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
-}
+MAPA_SUBDEPARTAMENTOS = { ... }  # mantém o seu inteiro
 
 # ================= UTIL =================
+
+def delay():
+    time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+
+def dentro_horario():
+    hora = datetime.now().hour
+    return HORA_INICIO <= hora <= HORA_FIM
 
 def limpar_sku(sku):
     return re.sub(r"[^0-9.]", "", sku)
@@ -87,6 +66,13 @@ def montar_url(sku):
 
 def sessao():
     s = requests.Session()
+
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Connection": "keep-alive"
+    })
+
     try:
         cookies = json.load(open(COOKIE_FILE))
         for c in cookies:
@@ -94,6 +80,7 @@ def sessao():
         print("✅ cookies carregados")
     except:
         print("⚠️ cookies não carregados")
+
     return s
 
 # ================= WOO =================
@@ -101,31 +88,41 @@ def sessao():
 def get_produtos():
     produtos = {}
     page = 1
+
     while True:
         r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
         if r.status_code != 200:
             break
+
         data = r.json()
         if not data:
             break
+
         for p in data:
             produtos[p["sku"]] = p["id"]
+
         page += 1
+
     return produtos
 
 def get_categorias():
     cats = {}
     page = 1
+
     while True:
         r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page": 100, "page": page})
         if r.status_code != 200:
             break
+
         data = r.json()
         if not data:
             break
+
         for c in data:
             cats[c["name"]] = c["id"]
+
         page += 1
+
     return cats
 
 def criar_categoria(nome, parent=None):
@@ -140,7 +137,14 @@ def criar_categoria(nome, parent=None):
 
 def pegar(session, sku):
     try:
+        delay()
         r = session.get(montar_url(sku), timeout=10)
+
+        # 🔥 DETECTAR LOGIN EXPIRADO
+        if "login" in r.text.lower():
+            print("🔐 sessão expirada! precisa renovar cookies")
+            return None
+
         if r.status_code != 200:
             return None
 
@@ -159,7 +163,9 @@ def pegar(session, sku):
             "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None,
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
         }
-    except:
+
+    except Exception as e:
+        print("❌ erro produto:", sku, e)
         return None
 
 # ================= ENVIO =================
@@ -168,14 +174,12 @@ def enviar(prod, sku, cache, cats):
     dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
     sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"], None)
 
-    # cria categoria pai
     if dep_nome not in cats:
         cats[dep_nome] = criar_categoria(dep_nome)
         print("📁 categoria criada:", dep_nome)
 
     cat_id = cats[dep_nome]
 
-    # cria subcategoria
     if sub_nome:
         if sub_nome not in cats:
             cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
@@ -193,6 +197,9 @@ def enviar(prod, sku, cache, cats):
         "description": prod["descricao"],
     }
 
+    # 🔥 LOG INTELIGENTE
+    print(f"💰 {sku} | R${prod['price']} | estoque {prod['stock']}")
+
     if sku in cache:
         requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
         print("♻️ update:", sku)
@@ -200,39 +207,60 @@ def enviar(prod, sku, cache, cats):
         requests.post(URL_WOO, auth=(CK, CS), json=payload)
         print("🆕 create:", sku)
 
-# ================= EXECUÇÃO =================
+# ================= PROCESSOS =================
 
-def executar():
-    print("\n🚀 ciclo iniciado")
+def atualizar_existentes(session, cache, cats):
+    print("🔄 atualização controlada...")
 
-    s = sessao()
+    skus = list(cache.keys())[:SKUS_POR_CICLO]
 
-    cache = get_produtos()
-    cats = get_categorias()
-
-    print(f"📦 {len(cache)} produtos no Woo")
-
-    # 🔄 ATUALIZA
-    for sku in cache:
-        prod = pegar(s, sku)
+    for sku in skus:
+        prod = pegar(session, sku)
         if prod:
             enviar(prod, sku, cache, cats)
 
-    # 🧠 DESCOBRE NOVOS
-    def processar(a):
-        for b in range(1, 15):
-            for c in range(0, 5):
+def descobrir_novos(session, cache, cats):
+    print("🧠 descoberta leve...")
+
+    encontrados = 0
+
+    for a in range(300, 360):
+        for b in range(1, 10):
+            for c in range(0, 3):
+
                 sku = f"{a}.{b}.{c}"
 
                 if sku in cache:
                     continue
 
-                prod = pegar(s, sku)
-                if prod:
-                    enviar(prod, sku, cache, cats)
+                prod = pegar(session, sku)
+                if not prod:
+                    continue
 
-    with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
-        ex.map(processar, range(300, 360))
+                enviar(prod, sku, cache, cats)
+                encontrados += 1
+
+                if encontrados >= 20:
+                    print("🛑 limite descoberta atingido")
+                    return
+
+# ================= EXECUÇÃO =================
+
+def executar():
+    if not dentro_horario():
+        print("🌙 fora do horário de operação")
+        return
+
+    print("\n🚀 ciclo iniciado")
+
+    s = sessao()
+    cache = get_produtos()
+    cats = get_categorias()
+
+    print(f"📦 {len(cache)} produtos no Woo")
+
+    atualizar_existentes(s, cache, cats)
+    descobrir_novos(s, cache, cats)
 
     print("✅ ciclo finalizado")
 
