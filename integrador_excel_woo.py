@@ -1,7 +1,6 @@
 import requests
 import time
 import json
-import re
 import random
 from datetime import datetime
 
@@ -17,15 +16,25 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 COOKIE_FILE = "cookies.json"
 
 INTERVALO = 1200
-SKUS_POR_CICLO = 150
+SKUS_POR_CICLO = 120
 
-DELAY_MIN = 1.0
-DELAY_MAX = 2.5
+DELAY_MIN = 1.5
+DELAY_MAX = 3.5
 
 HORA_INICIO = 8
 HORA_FIM = 22
 
 CACHE_FILE = "cache_local.json"
+
+# ================= LOG =================
+
+def log(msg):
+    print(msg)
+    try:
+        with open("log.txt", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now()} - {msg}\n")
+    except:
+        pass
 
 # ================= MAPAS =================
 
@@ -112,19 +121,13 @@ def montar_url(sku):
 def sessao():
     s = requests.Session()
 
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Connection": "keep-alive"
-    })
-
     try:
         cookies = json.load(open(COOKIE_FILE))
         for c in cookies:
             s.cookies.set(c["name"], c["value"])
-        print("✅ cookies carregados")
+        log("✅ cookies carregados")
     except:
-        print("⚠️ cookies não carregados")
+        log("⚠️ cookies não carregados")
 
     return s
 
@@ -185,10 +188,6 @@ def pegar(session, sku):
         delay()
         r = session.get(montar_url(sku), timeout=10)
 
-        if "login" in r.text.lower():
-            print("🔐 sessão expirada!")
-            return None
-
         if r.status_code != 200:
             return None
 
@@ -208,8 +207,7 @@ def pegar(session, sku):
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
         }
 
-    except Exception as e:
-        print("❌ erro produto:", sku, e)
+    except:
         return None
 
 # ================= ENVIO =================
@@ -220,20 +218,28 @@ def enviar(prod, sku, cache, cats, cache_local):
 
     if dep_nome not in cats:
         cats[dep_nome] = criar_categoria(dep_nome)
+        log(f"📁 categoria criada: {dep_nome}")
 
     cat_id = cats[dep_nome]
 
     if sub_nome:
         if sub_nome not in cats:
             cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
+            log(f"📂 subcategoria criada: {sub_nome}")
         cat_id = cats[sub_nome]
 
     antigo = cache_local.get(sku)
 
     if antigo:
         if antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
-            print(f"⏭️ sem mudança: {sku}")
+            log(f"⏭️ sem mudança: {sku}")
             return
+
+        if antigo["price"] != prod["price"]:
+            log(f"💲 preço mudou: {sku} {antigo['price']} → {prod['price']}")
+
+        if antigo["stock"] != prod["stock"]:
+            log(f"📦 estoque mudou: {sku} {antigo['stock']} → {prod['stock']}")
 
     payload = {
         "name": prod["name"],
@@ -246,79 +252,45 @@ def enviar(prod, sku, cache, cats, cache_local):
         "description": prod["descricao"],
     }
 
-    print(f"💰 {sku} | R${prod['price']} | estoque {prod['stock']}")
-
     if sku in cache:
         requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-        print("♻️ update:", sku)
+        log(f"♻️ update: {sku}")
     else:
         requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        print("🆕 create:", sku)
+        log(f"🆕 create: {sku}")
 
     cache_local[sku] = {
         "price": prod["price"],
         "stock": prod["stock"]
     }
 
-# ================= PROCESSOS =================
-
-def atualizar_existentes(session, cache, cats, cache_local):
-    print("🔄 atualização inteligente...")
-
-    skus = list(cache.keys())
-    random.shuffle(skus)
-
-    for sku in skus[:SKUS_POR_CICLO]:
-        prod = pegar(session, sku)
-        if prod:
-            enviar(prod, sku, cache, cats, cache_local)
-
-def descobrir_novos(session, cache, cats, cache_local):
-    print("🧠 descoberta leve...")
-
-    encontrados = 0
-
-    for a in range(300, 360):
-        for b in range(1, 6):
-
-            sku = f"{a}.{b}.0"
-
-            if sku in cache:
-                continue
-
-            prod = pegar(session, sku)
-            if not prod:
-                continue
-
-            enviar(prod, sku, cache, cats, cache_local)
-            encontrados += 1
-
-            if encontrados >= 5:
-                print("🛑 limite leve atingido")
-                return
-
 # ================= EXECUÇÃO =================
 
 def executar():
     if not dentro_horario():
-        print("🌙 fora do horário")
+        log("🌙 fora do horário")
         return
 
-    print("\n🚀 ciclo iniciado")
+    log("🚀 ciclo iniciado")
 
     s = sessao()
     cache = get_produtos()
     cats = get_categorias()
     cache_local = carregar_cache_local()
 
-    print(f"📦 {len(cache)} produtos no Woo")
+    log(f"📦 {len(cache)} produtos no Woo")
 
-    atualizar_existentes(s, cache, cats, cache_local)
-    descobrir_novos(s, cache, cats, cache_local)
+    skus = list(cache.keys())
+    random.shuffle(skus)
+
+    for sku in skus[:SKUS_POR_CICLO]:
+        prod = pegar(s, sku)
+        if prod:
+            enviar(prod, sku, cache, cats, cache_local)
 
     salvar_cache_local(cache_local)
 
-    print("✅ ciclo finalizado")
+    log("✅ ciclo finalizado")
 
 # ================= LOOP =================
 
