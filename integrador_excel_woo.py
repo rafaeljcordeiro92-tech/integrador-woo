@@ -8,100 +8,143 @@ from concurrent.futures import ThreadPoolExecutor
 
 URL = "https://portal.juntossomosimbativeis.com.br"
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
+URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
-SKU_FILE = "skus_validos.json"
 
 MAX_THREADS = 5
 INTERVALO = 300
+
+# ================= MAPAS (SEUS ORIGINAIS) =================
+
+MAPA_DEPARTAMENTOS = {
+    1010000000: "ELETRO",
+    1020000000: "MÓVEIS",
+    1050000000: "ESPORTE E LAZER",
+    1030000000: "INFORMÁTICA",
+    1040000000: "TELEF. CELULAR",
+    1060000000: "UTILIDADES",
+    1080000000: "CAMA, MESA E BANHO",
+    1090000000: "TAPETES",
+    1150000000: "LINHA AUTOMOTIVA",
+    1180000000: "LINHA ALTA",
+    1190000000: "COLCHÕES",
+    1170000000: "DECORAÇÃO"
+}
+
+MAPA_SUBDEPARTAMENTOS = {
+    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
+    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
+    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
+    1012040000: "FREEZER", 1012080000: "LAVADORAS",
+    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
+    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
+    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
+
+    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
+    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
+
+    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
+
+    1181020000: "COPA",
+
+    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
+
+    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
+    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
+    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
+    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
+    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
+    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
+    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
+    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
+    1026010000: "LAVANDERIA", 1023110000: "MESA",
+
+    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
+
+    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
+
+    1081010000: "CAMA",
+
+    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
+    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
+    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
+}
 
 # ================= UTIL =================
 
 def limpar_sku(sku):
     return re.sub(r"[^0-9.]", "", sku)
 
-def montar_url_produto(sku):
+def montar_url(sku):
     p = sku.split(".")
-    if len(p) < 3:
-        return None
     return f"{URL}/produto/detalhe/272/{p[0]}/{p[1]}/{p[2]}"
 
 # ================= SESSÃO =================
 
-def carregar_sessao():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json, text/plain, */*"
-    })
-
+def sessao():
+    s = requests.Session()
     try:
         cookies = json.load(open(COOKIE_FILE))
         for c in cookies:
-            session.cookies.set(c["name"], c["value"])
+            s.cookies.set(c["name"], c["value"])
         print("✅ cookies carregados")
     except:
         print("⚠️ cookies não carregados")
+    return s
 
-    return session
+# ================= WOO =================
 
-# ================= CACHE SKU =================
+def get_produtos():
+    produtos = {}
+    page = 1
+    while True:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+        if r.status_code != 200:
+            break
+        data = r.json()
+        if not data:
+            break
+        for p in data:
+            produtos[p["sku"]] = p["id"]
+        page += 1
+    return produtos
 
-def carregar_skus_salvos():
-    try:
-        with open(SKU_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
+def get_categorias():
+    cats = {}
+    page = 1
+    while True:
+        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page": 100, "page": page})
+        if r.status_code != 200:
+            break
+        data = r.json()
+        if not data:
+            break
+        for c in data:
+            cats[c["name"]] = c["id"]
+        page += 1
+    return cats
 
-def salvar_skus(skus):
-    with open(SKU_FILE, "w") as f:
-        json.dump(list(set(skus)), f, indent=2)
+def criar_categoria(nome, parent=None):
+    payload = {"name": nome}
+    if parent:
+        payload["parent"] = parent
 
-# ================= GERADOR =================
-
-def gerar_skus_base():
-    skus = []
-
-    for a in range(300, 360):
-        for b in range(1, 20):
-            for c in range(0, 10):
-                skus.append(f"{a}.{b}.{c}")
-
-    return skus
-
-def preparar_skus():
-    salvos = carregar_skus_salvos()
-    gerados = gerar_skus_base()
-
-    novos = list(set(gerados) - set(salvos))
-
-    print(f"🧠 {len(salvos)} SKUs já conhecidos")
-    print(f"🆕 {len(novos)} SKUs novos")
-
-    return novos, salvos
+    r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
+    return r.json()["id"]
 
 # ================= PRODUTO =================
 
-def pegar_produto(session, sku):
+def pegar(session, sku):
     try:
-        url = montar_url_produto(sku)
-        if not url:
-            return None
-
-        r = session.get(url, timeout=15)
-
+        r = session.get(montar_url(sku), timeout=10)
         if r.status_code != 200:
             return None
 
-        try:
-            data = r.json()
-        except:
-            return None
-
+        data = r.json()
         if not data.get("itens"):
             return None
 
@@ -109,95 +152,88 @@ def pegar_produto(session, sku):
 
         return {
             "name": p["produto"],
-            "price": f"{float(p['precovenda']):.2f}",
+            "price": str(round(float(p["precovenda"]), 2)),
             "stock": int(p["saldo"]),
-            "description": p.get("descricaotecnica", ""),
+            "descricao": p.get("descricaotecnica", ""),
+            "dep": p["iddepartamento"],
+            "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None,
             "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
         }
-
     except:
         return None
 
-# ================= WOO =================
+# ================= ENVIO =================
 
-def carregar_produtos_woo():
-    produtos = {}
-    page = 1
+def enviar(prod, sku, cache, cats):
+    dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
+    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"], None)
 
-    while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+    # cria categoria pai
+    if dep_nome not in cats:
+        cats[dep_nome] = criar_categoria(dep_nome)
+        print("📁 categoria criada:", dep_nome)
 
-        if r.status_code != 200:
-            break
+    cat_id = cats[dep_nome]
 
-        data = r.json()
-        if not data:
-            break
+    # cria subcategoria
+    if sub_nome:
+        if sub_nome not in cats:
+            cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
+            print("📂 subcategoria criada:", sub_nome)
+        cat_id = cats[sub_nome]
 
-        for p in data:
-            produtos[p["sku"]] = p["id"]
-
-        page += 1
-
-    return produtos
-
-def enviar(produto, sku, cache):
     payload = {
-        "name": produto["name"],
-        "regular_price": produto["price"],
+        "name": prod["name"],
+        "regular_price": prod["price"],
         "sku": sku,
-        "stock_quantity": produto["stock"],
+        "stock_quantity": prod["stock"],
         "manage_stock": True,
-        "stock_status": "instock",
-        "description": produto["description"],
-        "images": produto["images"],
+        "categories": [{"id": cat_id}],
+        "images": prod["images"],
+        "description": prod["descricao"],
     }
 
-    try:
-        if sku in cache:
-            requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-            print("♻️ update:", sku)
-        else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
-            print("🆕 create:", sku)
-    except:
-        print("❌ erro ao enviar:", sku)
+    if sku in cache:
+        requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+        print("♻️ update:", sku)
+    else:
+        requests.post(URL_WOO, auth=(CK, CS), json=payload)
+        print("🆕 create:", sku)
 
 # ================= EXECUÇÃO =================
 
 def executar():
     print("\n🚀 ciclo iniciado")
 
-    session = carregar_sessao()
+    s = sessao()
 
-    cache = carregar_produtos_woo()
+    cache = get_produtos()
+    cats = get_categorias()
+
     print(f"📦 {len(cache)} produtos no Woo")
 
-    novos_skus, skus_salvos = preparar_skus()
+    # 🔄 ATUALIZA
+    for sku in cache:
+        prod = pegar(s, sku)
+        if prod:
+            enviar(prod, sku, cache, cats)
 
-    validos = []
+    # 🧠 DESCOBRE NOVOS
+    def processar(a):
+        for b in range(1, 15):
+            for c in range(0, 5):
+                sku = f"{a}.{b}.{c}"
 
-    def processar(sku):
-        sku = limpar_sku(sku)
+                if sku in cache:
+                    continue
 
-        prod = pegar_produto(session, sku)
+                prod = pegar(s, sku)
+                if prod:
+                    enviar(prod, sku, cache, cats)
 
-        if not prod:
-            return
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
+        ex.map(processar, range(300, 360))
 
-        if prod["stock"] == 0:
-            return
-
-        validos.append(sku)
-        enviar(prod, sku, cache)
-
-    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        executor.map(processar, novos_skus)
-
-    todos = skus_salvos + validos
-    salvar_skus(todos)
-
-    print(f"💾 {len(validos)} novos SKUs salvos")
     print("✅ ciclo finalizado")
 
 # ================= LOOP =================
