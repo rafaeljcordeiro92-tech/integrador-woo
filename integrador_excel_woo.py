@@ -1,7 +1,6 @@
 import requests
 import time
 import json
-import random
 import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -15,9 +14,9 @@ URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-SKUS_POR_CICLO = 120
-MAX_WORKERS = 3
 TIMEOUT = 20
+MAX_WORKERS = 3
+CACHE_FILE = "cache_local.json"
 
 # ================= LOG =================
 
@@ -29,18 +28,28 @@ def log(msg):
 # ================= RETRY =================
 
 def request_com_retry(method, url, **kwargs):
-    for tentativa in range(3):
+    for i in range(3):
         try:
             return requests.request(method, url, **kwargs)
-        except requests.exceptions.RequestException:
-            log(f"⚠️ retry {tentativa+1}")
+        except:
+            log(f"⚠️ retry {i+1}")
             time.sleep(2)
     return None
 
+# ================= CACHE =================
+
+def carregar_cache():
+    try:
+        return json.load(open(CACHE_FILE))
+    except:
+        return {}
+
+def salvar_cache(cache):
+    json.dump(cache, open(CACHE_FILE, "w"))
+
 # ================= FILTRO =================
 
-def produto_bloqueado(prod):
-    nome = prod.get("name", "")
+def produto_bloqueado(nome):
     texto = re.sub(r'[^A-Z\s]', ' ', nome.upper())
     palavras = texto.split()
 
@@ -49,7 +58,6 @@ def produto_bloqueado(prod):
             return True
         if p == "BEM" and i+1 < len(palavras) and palavras[i+1] == "MM":
             return True
-
     return False
 
 # ================= MAPAS =================
@@ -105,7 +113,7 @@ def get_produtos():
     produtos = {}
     page = 1
     while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page":100,"page":page})
         if r.status_code != 200:
             break
         data = r.json()
@@ -120,7 +128,7 @@ def get_categorias():
     cats = {}
     page = 1
     while True:
-        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page": 100, "page": page})
+        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page":100,"page":page})
         if r.status_code != 200:
             break
         data = r.json()
@@ -138,53 +146,23 @@ def criar_categoria(nome, parent=None):
     r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
     return r.json()["id"]
 
-# ================= PRODUTO =================
+# ================= FORNECEDOR =================
 
-def pegar(sku):
+def get_produtos_fornecedor():
     try:
-        url = f"{URL}/produto/detalhe/272/{'/'.join(sku.split('.')[:3])}"
+        url = f"{URL}/produto/catalogo"
         r = request_com_retry("GET", url, timeout=TIMEOUT)
-
-        if not r or r.status_code != 200:
-            return None
-
-        data = r.json()
-        if not data.get("itens"):
-            return None
-
-        p = data["itens"][0]
-
-        # IMAGENS SEGURAS
-        images = []
-        try:
-            for img in p.get("fotos", {}).get("imagem", []):
-                lista = img.get("grande", [])
-                if isinstance(lista, list) and len(lista) > 0:
-                    url_img = lista[0]
-                    if url_img and "http" in url_img:
-                        images.append({"src": url_img})
-        except Exception as e:
-            log(f"⚠️ erro imagem {sku}: {e}")
-
-        return {
-            "name": p["produto"],
-            "price": str(round(float(p["precovenda"]), 2)),
-            "stock": int(p["saldo"]),
-            "descricao": p.get("descricaotecnica", ""),
-            "dep": p["iddepartamento"],
-            "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None,
-            "images": images,
-        }
-
-    except Exception as e:
-        log(f"❌ erro produto {sku}: {e}")
-        return None
+        if not r:
+            return []
+        return r.json().get("itens", [])
+    except:
+        return []
 
 # ================= ENVIO =================
 
 def enviar(prod, sku, cache, cats):
     dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
-    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"], None)
+    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"])
 
     if dep_nome not in cats:
         cats[dep_nome] = criar_categoria(dep_nome)
@@ -203,16 +181,22 @@ def enviar(prod, sku, cache, cats):
         "stock_quantity": prod["stock"],
         "manage_stock": True,
         "categories": [{"id": cat_id}],
-        "images": prod["images"],
-        "description": prod["descricao"],
+        "images": prod["images"]
     }
 
     if sku in cache:
-        request_com_retry("PUT", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload, timeout=TIMEOUT)
+        request_com_retry("PUT", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
         log(f"♻️ atualização: {sku}")
     else:
-        request_com_retry("POST", URL_WOO, auth=(CK, CS), json=payload, timeout=TIMEOUT)
+        request_com_retry("POST", URL_WOO, auth=(CK, CS), json=payload)
         log(f"🆕 criação: {sku}")
+
+# ================= ZERAR =================
+
+def zerar_estoque(prod_id, sku):
+    payload = {"stock_quantity": 0, "manage_stock": True}
+    request_com_retry("PUT", f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+    log(f"📉 estoque zerado: {sku}")
 
 # ================= EXECUÇÃO =================
 
@@ -221,23 +205,57 @@ def executar():
 
     cache = get_produtos()
     cats = get_categorias()
+    cache_local = carregar_cache()
 
-    skus = list(cache.keys())
-    random.shuffle(skus)
+    produtos = get_produtos_fornecedor()
+    processados = set()
 
-    def processar(sku):
-        prod = pegar(sku)
-        if not prod:
+    def processar(p):
+        sku = p["codigo"]
+        nome = p["produto"]
+
+        if produto_bloqueado(nome):
+            if sku in cache:
+                request_com_retry("DELETE", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), params={"force": True})
+                log(f"🗑️ removido MM: {sku}")
             return
 
-        if produto_bloqueado(prod):
-            log(f"🚫 bloqueado: {sku} - {prod['name']}")
+        processados.add(sku)
+
+        prod = {
+            "name": nome,
+            "price": str(round(float(p["precovenda"]), 2)),
+            "stock": int(p["saldo"]),
+            "dep": p.get("iddepartamento"),
+            "subdep": p.get("idsubdepartamento"),
+            "images": []
+        }
+
+        # imagens seguras
+        for img in p.get("fotos", {}).get("imagem", []):
+            if img.get("grande"):
+                prod["images"].append({"src": img["grande"][0]})
+
+        antigo = cache_local.get(sku)
+        if antigo and antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
+            log(f"⏭️ sem mudança: {sku}")
             return
 
         enviar(prod, sku, cache, cats)
 
+        cache_local[sku] = {
+            "price": prod["price"],
+            "stock": prod["stock"]
+        }
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        executor.map(processar, skus[:SKUS_POR_CICLO])
+        executor.map(processar, produtos)
+
+    for sku, prod_id in cache.items():
+        if sku not in processados:
+            zerar_estoque(prod_id, sku)
+
+    salvar_cache(cache_local)
 
     log("✅ ciclo finalizado")
 
