@@ -35,7 +35,35 @@ MAPA_DEPARTAMENTOS = {
     1170000000: "DECORAÇÃO"
 }
 
-MAPA_SUBDEPARTAMENTOS = { ... }  # mantém seu completo aqui
+MAPA_SUBDEPARTAMENTOS = {
+    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
+    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
+    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
+    1012040000: "FREEZER", 1012080000: "LAVADORAS",
+    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
+    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
+    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
+    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
+    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
+    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
+    1181020000: "COPA",
+    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
+    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
+    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
+    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
+    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
+    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
+    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
+    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
+    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
+    1026010000: "LAVANDERIA", 1023110000: "MESA",
+    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
+    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
+    1081010000: "CAMA",
+    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
+    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
+    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
+}
 
 # ================= LOG =================
 
@@ -84,32 +112,52 @@ def produto_bloqueado(nome):
 def get_produtos():
     produtos = {}
     page = 1
+
     while True:
         r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page":100,"page":page})
-        if not data := r.json():
+        if r.status_code != 200:
             break
+
+        data = r.json()
+        if not data:
+            break
+
         for p in data:
             produtos[p["sku"]] = p["id"]
+
         page += 1
+
     return produtos
+
 
 def get_categorias():
     cats = {}
     page = 1
+
     while True:
         r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page":100,"page":page})
-        if not data := r.json():
+        if r.status_code != 200:
             break
+
+        data = r.json()
+        if not data:
+            break
+
         for c in data:
             cats[c["name"]] = c["id"]
+
         page += 1
+
     return cats
+
 
 def criar_categoria(nome, parent=None):
     payload = {"name": nome}
     if parent:
         payload["parent"] = parent
-    return requests.post(URL_CAT, auth=(CK, CS), json=payload).json()["id"]
+
+    r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
+    return r.json()["id"]
 
 # ================= FORNECEDOR =================
 
@@ -138,6 +186,7 @@ def get_produtos_departamento(dep):
 
     return produtos
 
+
 def get_todos_produtos():
     todos = []
 
@@ -146,8 +195,48 @@ def get_todos_produtos():
         produtos = get_produtos_departamento(dep)
         todos.extend(produtos)
 
-    log(f"📊 total produtos fornecedor: {len(todos)}")
+    log(f"📊 total fornecedor: {len(todos)}")
     return todos
+
+# ================= ENVIO =================
+
+def enviar(prod, sku, cache, cats):
+    dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
+    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"])
+
+    if dep_nome not in cats:
+        cats[dep_nome] = criar_categoria(dep_nome)
+
+    cat_id = cats[dep_nome]
+
+    if sub_nome:
+        if sub_nome not in cats:
+            cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
+        cat_id = cats[sub_nome]
+
+    payload = {
+        "name": prod["name"],
+        "regular_price": prod["price"],
+        "sku": sku,
+        "stock_quantity": prod["stock"],
+        "manage_stock": True,
+        "categories": [{"id": cat_id}],
+        "images": prod["images"]
+    }
+
+    if sku in cache:
+        request_com_retry("PUT", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
+        log(f"♻️ atualização: {sku}")
+    else:
+        request_com_retry("POST", URL_WOO, auth=(CK, CS), json=payload)
+        log(f"🆕 criação: {sku}")
+
+# ================= ZERAR =================
+
+def zerar_estoque(prod_id, sku):
+    payload = {"stock_quantity": 0, "manage_stock": True}
+    request_com_retry("PUT", f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+    log(f"📉 estoque zerado: {sku}")
 
 # ================= EXECUÇÃO =================
 
@@ -177,7 +266,7 @@ def executar():
             "name": nome,
             "price": str(round(float(p["precovenda"]), 2)),
             "stock": int(p["saldo"]),
-            "dep": None,
+            "dep": p.get("iddepartamento"),
             "subdep": p.get("idsubdepartamento"),
             "images": []
         }
@@ -200,14 +289,18 @@ def executar():
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         executor.map(processar, produtos)
 
-    # 🔒 proteção inteligente
+    # proteção contra erro de lista incompleta
     if len(processados) > 100:
         for sku, prod_id in cache.items():
             if sku not in processados:
                 zerar_estoque(prod_id, sku)
     else:
-        log("⚠️ proteção ativada - não zerando estoque")
+        log("⚠️ proteção ativada - poucos produtos")
 
     salvar_cache(cache_local)
 
     log("✅ ciclo finalizado")
+
+
+if __name__ == "__main__":
+    executar()
