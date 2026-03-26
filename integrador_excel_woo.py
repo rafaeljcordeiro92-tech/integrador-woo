@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 BASE = "https://portal.juntossomosimbativeis.com.br"
 LOGIN_URL = BASE + "/login/parceiro"
-BUSCA_URL = BASE + "/produto/listar"
+BUSCA_URL = BASE + "/produto/getPorCodigoNome/%20/2/272"
 EMPRESA = 272
 
 USUARIO = "00905486986"
@@ -33,38 +33,6 @@ session.headers.update({
     "Origin": BASE
 })
 
-# ================= MAPAS =================
-
-MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-    1181020000: "COPA",
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-    1081010000: "CAMA",
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
-}
-
 # ================= LOG =================
 
 def log(msg):
@@ -82,21 +50,20 @@ def login():
     }
 
     r = session.post(LOGIN_URL, json=payload)
+
     if not r.json().get("status"):
         log("❌ login falhou")
         exit()
 
     log("✅ login OK")
 
-# ================= BUSCA REAL =================
+# ================= BUSCA =================
 
 def buscar_skus():
 
-    payload = {
-        "busca": " "
-    }
+    r = session.get(BUSCA_URL, timeout=TIMEOUT)
 
-    r = session.post(BUSCA_URL, json=payload, timeout=TIMEOUT)
+    log(f"STATUS BUSCA: {r.status_code}")
 
     data = r.json()
 
@@ -153,6 +120,14 @@ def enviar(prod):
     except:
         log(f"❌ erro envio {prod['sku']}")
 
+# ================= MAPA =================
+
+MAPA_SUBDEPARTAMENTOS = {
+    1191030000: "COLCHÕES DE CASAL",
+    1191020000: "COLCHÕES DE SOLTEIRO",
+    1193030000: "CAMA BOX"
+}
+
 # ================= MAIN =================
 
 def executar():
@@ -162,6 +137,7 @@ def executar():
     login()
 
     cache = load_cache()
+
     skus = buscar_skus()
 
     def processar(sku):
@@ -201,6 +177,7 @@ def executar():
             return
 
         enviar(prod)
+
         cache[sku] = prod
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
