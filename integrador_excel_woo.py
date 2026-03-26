@@ -40,18 +40,29 @@ def log(msg):
 def limpar_sku(sku):
     return re.sub(r"[^0-9.]", "", str(sku)).strip()
 
-# ================= FILTRO MM FINAL =================
+# ================= FILTRO MM FINAL DEFINITIVO =================
 
 def produto_bloqueado(prod):
-    desc = prod["descricao"].upper()
+    desc = prod.get("descricao", "")
 
-    # bloqueia "BEM MM"
-    if re.search(r'\bBEM\s+MM\b', desc):
-        return True
+    if not desc:
+        return False
 
-    # bloqueia "MM" isolado
-    if re.search(r'\bMM\b', desc):
-        return True
+    # normaliza texto
+    texto = desc.upper().replace("\n", " ").replace("\r", " ")
+
+    # quebra em palavras
+    palavras = texto.split()
+
+    for i, p in enumerate(palavras):
+
+        # MM isolado
+        if p == "MM":
+            return True
+
+        # BEM MM
+        if p == "BEM" and i + 1 < len(palavras) and palavras[i + 1] == "MM":
+            return True
 
     return False
 
@@ -245,11 +256,11 @@ def enviar(prod, sku, cache, cats, cache_local):
     try:
         if sku in cache:
             requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-            log(f"♻️ update: {sku}")
+            log(f"♻️ atualização: {sku}")
             registrar_evento("updates")
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
-            log(f"🆕 create: {sku}")
+            log(f"🆕 criação: {sku}")
             registrar_evento("novos")
 
     except Exception as e:
@@ -295,10 +306,3 @@ def executar():
     salvar_cache_local(cache_local)
 
     log("✅ ciclo finalizado")
-
-# ================= LOOP AUTOMÁTICO =================
-
-if __name__ == "__main__":
-    while True:
-        executar()
-        time.sleep(INTERVALO)
