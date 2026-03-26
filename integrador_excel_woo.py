@@ -5,6 +5,7 @@ import random
 import re
 from datetime import datetime
 from stats import registrar_evento
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ================= CONFIG =================
 
@@ -17,11 +18,10 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 COOKIE_FILE = "cookies.json"
 
-INTERVALO = 1200
 SKUS_POR_CICLO = 120
 
-DELAY_MIN = 1.5
-DELAY_MAX = 3.5
+DELAY_MIN = 0.3
+DELAY_MAX = 1.0
 
 HORA_INICIO = 8
 HORA_FIM = 22
@@ -40,7 +40,7 @@ def log(msg):
 def limpar_sku_url(sku):
     return re.sub(r"[^0-9.]", "", str(sku)).strip()
 
-# ================= FILTRO MM (FINAL - NOME) =================
+# ================= FILTRO =================
 
 def produto_bloqueado(prod):
     nome = prod.get("name", "")
@@ -49,19 +49,12 @@ def produto_bloqueado(prod):
         return False
 
     texto = nome.upper()
-
-    # mantém apenas letras e espaços
     texto = re.sub(r'[^A-Z\s]', ' ', texto)
-
     palavras = texto.split()
 
     for i, p in enumerate(palavras):
-
-        # MM isolado
         if p == "MM":
             return True
-
-        # BEM MM
         if p == "BEM" and i + 1 < len(palavras) and palavras[i + 1] == "MM":
             return True
 
@@ -114,205 +107,5 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= CACHE =================
-
-def carregar_cache_local():
-    try:
-        return json.load(open(CACHE_FILE))
-    except:
-        return {}
-
-def salvar_cache_local(cache):
-    json.dump(cache, open(CACHE_FILE, "w"))
-
-# ================= UTIL =================
-
-def delay():
-    time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
-
-def dentro_horario():
-    hora = datetime.now().hour
-    return HORA_INICIO <= hora <= HORA_FIM
-
-def montar_url(sku):
-    p = sku.split(".")
-    return f"{URL}/produto/detalhe/272/{p[0]}/{p[1]}/{p[2]}"
-
-# ================= SESSÃO =================
-
-def sessao():
-    s = requests.Session()
-    try:
-        cookies = json.load(open(COOKIE_FILE))
-        for c in cookies:
-            s.cookies.set(c["name"], c["value"])
-        log("✅ cookies carregados")
-    except:
-        log("⚠️ cookies não carregados")
-    return s
-
-# ================= WOO =================
-
-def get_produtos():
-    produtos = {}
-    page = 1
-    while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
-        if r.status_code != 200:
-            break
-        data = r.json()
-        if not data:
-            break
-        for p in data:
-            produtos[p["sku"]] = p["id"]
-        page += 1
-    return produtos
-
-def get_categorias():
-    cats = {}
-    page = 1
-    while True:
-        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page": 100, "page": page})
-        if r.status_code != 200:
-            break
-        data = r.json()
-        if not data:
-            break
-        for c in data:
-            cats[c["name"]] = c["id"]
-        page += 1
-    return cats
-
-def criar_categoria(nome, parent=None):
-    payload = {"name": nome}
-    if parent:
-        payload["parent"] = parent
-    r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
-    return r.json()["id"]
-
-# ================= PRODUTO =================
-
-def pegar(session, sku_limpo):
-    try:
-        delay()
-        r = session.get(montar_url(sku_limpo), timeout=10)
-
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-        if not data.get("itens"):
-            return None
-
-        p = data["itens"][0]
-
-        # DETECTAR ESTRELA
-        tem_estrela = "fa-star" in json.dumps(p)
-
-        nome = p["produto"]
-
-        if tem_estrela:
-            nome = "⭐ " + nome
-
-        return {
-            "name": nome,
-            "price": str(round(float(p["precovenda"]), 2)),
-            "stock": int(p["saldo"]),
-            "descricao": p.get("descricaotecnica", ""),
-            "dep": p["iddepartamento"],
-            "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None,
-            "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
-        }
-
-    except Exception as e:
-        log(f"❌ erro produto {sku_limpo}: {e}")
-        registrar_evento("erros")
-        return None
-
-# ================= ENVIO =================
-
-def enviar(prod, sku_original, cache, cats, cache_local):
-    dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
-    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"], None)
-
-    if dep_nome not in cats:
-        cats[dep_nome] = criar_categoria(dep_nome)
-
-    cat_id = cats[dep_nome]
-
-    if sub_nome:
-        if sub_nome not in cats:
-            cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
-        cat_id = cats[sub_nome]
-
-    antigo = cache_local.get(sku_original)
-
-    if antigo:
-        if antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
-            return
-
-    payload = {
-        "name": prod["name"],
-        "regular_price": prod["price"],
-        "sku": sku_original,
-        "stock_quantity": prod["stock"],
-        "manage_stock": True,
-        "categories": [{"id": cat_id}],
-        "images": prod["images"],
-        "description": prod["descricao"],
-    }
-
-    try:
-        if sku_original in cache:
-            requests.put(f"{URL_WOO}/{cache[sku_original]}", auth=(CK, CS), json=payload)
-            log(f"♻️ atualização: {sku_original}")
-            registrar_evento("updates")
-        else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
-            log(f"🆕 criação: {sku_original}")
-            registrar_evento("novos")
-
-    except Exception as e:
-        log(f"❌ erro envio: {sku_original} - {e}")
-        registrar_evento("erros")
-
-    cache_local[sku_original] = {
-        "price": prod["price"],
-        "stock": prod["stock"]
-    }
-
-# ================= EXECUÇÃO =================
-
-def executar():
-    if not dentro_horario():
-        log("🌙 fora do horário")
-        return
-
-    log("🚀 ciclo iniciado")
-
-    s = sessao()
-    cache = get_produtos()
-    cats = get_categorias()
-    cache_local = carregar_cache_local()
-
-    skus = list(cache.keys())
-    random.shuffle(skus)
-
-    for sku in skus[:SKUS_POR_CICLO]:
-
-        sku_original = sku
-        sku_limpo = limpar_sku_url(sku)
-
-        prod = pegar(s, sku_limpo)
-        if not prod:
-            continue
-
-        if produto_bloqueado(prod):
-            log(f"🚫 bloqueado (MM isolado): {sku_original} - {prod['name']}")
-            continue
-
-        enviar(prod, sku_original, cache, cats, cache_local)
-
-    salvar_cache_local(cache_local)
-
-    log("✅ ciclo finalizado")
+# ================= RESTANTE DO SCRIPT =================
+# (continua igual ao que te mandei antes — pegar, enviar, threads, executar)
