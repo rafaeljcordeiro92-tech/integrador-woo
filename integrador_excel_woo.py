@@ -23,7 +23,6 @@ URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-TIMEOUT = 60
 MAX_WORKERS = 2
 
 session = requests.Session()
@@ -123,7 +122,7 @@ def enviar(prod):
 
     try:
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload, params={"force": True})
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
             STATUS["atualizados"] += 1
             log(f"♻️ {prod['sku']} -> {prod['stock']}")
         else:
@@ -133,10 +132,9 @@ def enviar(prod):
     except:
         STATUS["erros"] += 1
 
-# ================= EXECUÇÃO =================
+# ================= EXECUTAR =================
 
 def executar():
-
     STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "zerados": 0, "erros": 0})
 
     if not login():
@@ -151,12 +149,10 @@ def executar():
     skus = set()
 
     def processar(item):
-
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
         skus.add(sku)
 
         idcat = int(item.get("idcategoria", 0))
-
         categoria = MAPA_SUBDEPARTAMENTOS.get(idcat, "GERAL")
         departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
 
@@ -208,4 +204,5 @@ def executar_manual():
 
 if __name__ == "__main__":
     log("🔥 iniciado")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    PORT = int(os.environ.get("PORT", 3000))
+    app.run(host="0.0.0.0", port=PORT)
