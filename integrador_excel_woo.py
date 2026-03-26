@@ -40,25 +40,18 @@ def log(msg):
 def limpar_sku(sku):
     return re.sub(r"[^0-9.]", "", str(sku)).strip()
 
-# ================= FILTRO MM CORRIGIDO =================
+# ================= FILTRO MM FINAL =================
 
 def produto_bloqueado(prod):
-    nome = prod["name"].upper()
     desc = prod["descricao"].upper()
 
-    texto = f"{nome} {desc}"
-
-    # separa palavras reais corretamente
-    palavras = re.findall(r'\b\w+\b', texto)
-
-    # BLOQUEIA se tiver "MM" sozinho
-    if "MM" in palavras:
+    # bloqueia "BEM MM"
+    if re.search(r'\bBEM\s+MM\b', desc):
         return True
 
-    # BLOQUEIA se tiver "BEM MM"
-    for i in range(len(palavras) - 1):
-        if palavras[i] == "BEM" and palavras[i + 1] == "MM":
-            return True
+    # bloqueia "MM" isolado
+    if re.search(r'\bMM\b', desc):
+        return True
 
     return False
 
@@ -302,3 +295,10 @@ def executar():
     salvar_cache_local(cache_local)
 
     log("✅ ciclo finalizado")
+
+# ================= LOOP AUTOMÁTICO =================
+
+if __name__ == "__main__":
+    while True:
+        executar()
+        time.sleep(INTERVALO)
