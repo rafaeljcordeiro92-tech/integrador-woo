@@ -1,8 +1,11 @@
 import requests
 import json
 import re
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from flask import Flask
+import threading
 
 # ================= CONFIG =================
 
@@ -22,9 +25,9 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 CACHE_FILE = "cache.json"
 TIMEOUT = 20
 MAX_WORKERS = 5
+INTERVALO = 300  # 5 min
 
 session = requests.Session()
-
 session.headers.update({
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json, text/plain, */*",
@@ -33,6 +36,21 @@ session.headers.update({
 })
 
 # ================= MAPAS =================
+
+MAPA_DEPARTAMENTOS = {
+    1010000000: "ELETRO",
+    1020000000: "MÓVEIS",
+    1050000000: "ESPORTE E LAZER",
+    1030000000: "INFORMÁTICA",
+    1040000000: "TELEF. CELULAR",
+    1060000000: "UTILIDADES",
+    1080000000: "CAMA, MESA E BANHO",
+    1090000000: "TAPETES",
+    1150000000: "LINHA AUTOMOTIVA",
+    1180000000: "LINHA ALTA",
+    1190000000: "COLCHÕES",
+    1170000000: "DECORAÇÃO"
+}
 
 MAPA_SUBDEPARTAMENTOS = {
     1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
@@ -84,22 +102,20 @@ def login():
 
     if not r.json().get("status"):
         log("❌ login falhou")
-        exit()
+        return False
 
     log("✅ login OK")
+    return True
 
 # ================= BUSCA =================
 
 def buscar_skus():
-
     r = session.get(BUSCA_URL, timeout=TIMEOUT)
-
     data = r.json()
 
     skus = []
 
     for item in data.get("itens", []):
-
         idproduto = item.get("idproduto")
 
         try:
@@ -111,8 +127,7 @@ def buscar_skus():
 
             if grades:
                 for g in grades:
-                    sku = f"{idproduto}.{g['grade']}"
-                    skus.append(sku)
+                    skus.append(f"{idproduto}.{g['grade']}")
             else:
                 skus.append(f"{idproduto}.0.0")
 
@@ -120,7 +135,6 @@ def buscar_skus():
             continue
 
     log(f"📦 TOTAL SKUS: {len(skus)}")
-
     return skus
 
 # ================= DETALHE =================
@@ -138,7 +152,7 @@ def get_detalhe(sku):
 
 def bloqueado(nome):
     palavras = re.sub(r'[^A-Z\s]', ' ', nome.upper()).split()
-    return "MM" in palavras or ("BEM" in palavras and "MM" in palavras)
+    return "MM" in palavras
 
 # ================= CACHE =================
 
@@ -153,7 +167,19 @@ def save_cache(c):
 
 # ================= WOO =================
 
+def produto_existe(sku):
+    try:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
+        data = r.json()
+        if data:
+            return data[0]["id"]
+        return None
+    except:
+        return None
+
 def enviar(prod):
+
+    prod_id = produto_existe(prod["sku"])
 
     payload = {
         "name": prod["name"],
@@ -161,26 +187,33 @@ def enviar(prod):
         "sku": prod["sku"],
         "stock_quantity": prod["stock"],
         "manage_stock": True,
-        "categories": [{"name": prod["categoria"]}],
+        "categories": [
+            {"name": prod["departamento"]},
+            {"name": prod["categoria"]}
+        ],
         "images": prod["images"]
     }
 
     try:
-        requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        log(f"🆕 {prod['sku']}")
+        if prod_id:
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            log(f"♻️ atualizado {prod['sku']}")
+        else:
+            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            log(f"🆕 criado {prod['sku']}")
     except:
         log(f"❌ erro envio {prod['sku']}")
 
-# ================= MAIN =================
+# ================= PROCESSO =================
 
 def executar():
 
     log("🚀 inicio")
 
-    login()
+    if not login():
+        return
 
     cache = load_cache()
-
     skus = buscar_skus()
 
     def processar(sku):
@@ -192,10 +225,15 @@ def executar():
         nome = data["produto"]
 
         if bloqueado(nome):
+            log(f"🚫 bloqueado: {nome}")
             return
 
-        categoria = MAPA_SUBDEPARTAMENTOS.get(
-            int(data.get("idcategoria", 0)),
+        idcat = int(data.get("idcategoria", 0))
+
+        categoria = MAPA_SUBDEPARTAMENTOS.get(idcat, "GERAL")
+
+        departamento = MAPA_DEPARTAMENTOS.get(
+            int(str(idcat)[:3] + "0000000"),
             "GERAL"
         )
 
@@ -205,6 +243,7 @@ def executar():
             "sku": sku,
             "stock": int(data["saldo"]),
             "categoria": categoria,
+            "departamento": departamento,
             "images": []
         }
 
@@ -220,16 +259,33 @@ def executar():
             return
 
         enviar(prod)
-
         cache[sku] = prod
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         ex.map(processar, skus)
 
     save_cache(cache)
-
     log("✅ finalizado")
 
+# ================= LOOP + SERVER =================
+
+app = Flask(__name__)
+
+def loop():
+    while True:
+        try:
+            executar()
+        except Exception as e:
+            log(f"❌ erro loop: {e}")
+
+        time.sleep(INTERVALO)
+
+@app.route("/")
+def home():
+    return "Integrador Woo rodando 🚀"
 
 if __name__ == "__main__":
-    executar()
+    t = threading.Thread(target=loop)
+    t.start()
+
+    app.run(host="0.0.0.0", port=8080)
