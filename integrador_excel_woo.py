@@ -15,8 +15,6 @@ URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-COOKIE_FILE = "cookies.json"
-
 SKUS_POR_CICLO = 120
 MAX_WORKERS = 3
 TIMEOUT = 20
@@ -118,8 +116,6 @@ def get_produtos():
         page += 1
     return produtos
 
-# ================= CATEGORIAS =================
-
 def get_categorias():
     cats = {}
     page = 1
@@ -158,6 +154,18 @@ def pegar(sku):
 
         p = data["itens"][0]
 
+        # IMAGENS SEGURAS
+        images = []
+        try:
+            for img in p.get("fotos", {}).get("imagem", []):
+                lista = img.get("grande", [])
+                if isinstance(lista, list) and len(lista) > 0:
+                    url_img = lista[0]
+                    if url_img and "http" in url_img:
+                        images.append({"src": url_img})
+        except Exception as e:
+            log(f"⚠️ erro imagem {sku}: {e}")
+
         return {
             "name": p["produto"],
             "price": str(round(float(p["precovenda"]), 2)),
@@ -165,7 +173,7 @@ def pegar(sku):
             "descricao": p.get("descricaotecnica", ""),
             "dep": p["iddepartamento"],
             "subdep": int(p.get("idcategoria")) if p.get("idcategoria") else None,
-            "images": [{"src": img["grande"][0]} for img in p["fotos"]["imagem"]],
+            "images": images,
         }
 
     except Exception as e:
@@ -214,7 +222,7 @@ def executar():
     cache = get_produtos()
     cats = get_categorias()
 
-    skus = list(cache.keys())  # fallback seguro
+    skus = list(cache.keys())
     random.shuffle(skus)
 
     def processar(sku):
