@@ -2,19 +2,34 @@ from flask import Flask, render_template_string, jsonify
 import json
 import threading
 import time
-from datetime import datetime
+import os
 from integrador_excel_woo import executar
 
 app = Flask(__name__)
 
-# ================= LOOP =================
+# ================= LOOP BACKGROUND =================
 
 def loop():
-    while True:
-        executar()
-        time.sleep(1200)
+    time.sleep(5)  # deixa o servidor subir primeiro
 
-threading.Thread(target=loop, daemon=True).start()
+    while True:
+        try:
+            print("🚀 Iniciando execução do integrador...")
+            executar()
+            print("✅ Execução finalizada")
+        except Exception as e:
+            print("❌ Erro no loop:", e)
+
+        time.sleep(1200)  # 20 min
+
+def start_background():
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+# inicia depois que o Flask sobe
+@app.before_first_request
+def iniciar():
+    start_background()
 
 # ================= HTML =================
 
@@ -124,6 +139,8 @@ fetch('/data')
 .then(r => r.json())
 .then(d => {
 
+if(!d.produtos) return
+
 document.getElementById('novos').innerText = d.novos
 document.getElementById('atualizados').innerText = d.atualizados
 document.getElementById('erros').innerText = d.erros
@@ -194,8 +211,13 @@ def home():
 @app.route("/data")
 def data():
     try:
-        return json.load(open("dashboard.json"))
+        with open("dashboard.json", encoding="utf-8") as f:
+            return json.load(f)
     except:
-        return {"erro":"sem dados ainda"}
+        return {"produtos":[]}
 
-app.run(host="0.0.0.0", port=3000)
+# ================= START =================
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 3000))
+    app.run(host="0.0.0.0", port=port)
