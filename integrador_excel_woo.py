@@ -7,7 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 # ================= CONFIG =================
 
-URL = "https://portal.juntossomosimbativeis.com.br"
+BASE = "https://portal.juntossomosimbativeis.com.br"
+LOGIN_URL = BASE + "/login/parceiro"
+EMPRESA = 272
+
+USUARIO = "00905486986"
+SENHA = "Rafael2026@"
+
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
@@ -17,6 +23,8 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 TIMEOUT = 20
 MAX_WORKERS = 3
 CACHE_FILE = "cache_local.json"
+
+session = requests.Session()
 
 # ================= MAPAS =================
 
@@ -72,16 +80,24 @@ def log(msg):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"{datetime.now()} - {msg}\n")
 
-# ================= RETRY =================
+# ================= LOGIN =================
 
-def request_retry(method, url, **kwargs):
-    for i in range(3):
-        try:
-            return requests.request(method, url, timeout=TIMEOUT, **kwargs)
-        except:
-            log(f"⚠️ retry {i+1}")
-            time.sleep(2)
-    return None
+def login():
+    payload = {
+        "cpf": USUARIO,
+        "senha": SENHA,
+        "idempresa": EMPRESA
+    }
+
+    r = session.post(LOGIN_URL, json=payload)
+
+    data = r.json()
+
+    if not data.get("status"):
+        log("❌ login falhou")
+        exit()
+
+    log("✅ login OK")
 
 # ================= CACHE =================
 
@@ -100,50 +116,6 @@ def bloqueado(nome):
     palavras = re.sub(r'[^A-Z\s]', ' ', nome.upper()).split()
     return "MM" in palavras or ("BEM" in palavras and "MM" in palavras)
 
-# ================= WOO =================
-
-def get_woo():
-    produtos = {}
-    page = 1
-
-    while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page":100,"page":page})
-        data = r.json()
-        if not data:
-            break
-
-        for p in data:
-            produtos[p["sku"]] = p["id"]
-
-        page += 1
-
-    return produtos
-
-def get_cats():
-    cats = {}
-    page = 1
-
-    while True:
-        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page":100,"page":page})
-        data = r.json()
-        if not data:
-            break
-
-        for c in data:
-            cats[c["name"]] = c["id"]
-
-        page += 1
-
-    return cats
-
-def cria_cat(nome, parent=None):
-    payload = {"name": nome}
-    if parent:
-        payload["parent"] = parent
-
-    r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
-    return r.json()["id"]
-
 # ================= FORNECEDOR =================
 
 def get_dep(dep):
@@ -151,18 +123,18 @@ def get_dep(dep):
     offset = 0
 
     while True:
-        url = f"{URL}/produto/getPorDepartamento/{dep}/272/{offset}/0/0"
+        url = f"{BASE}/produto/getPorDepartamento/{dep}/{EMPRESA}/{offset}/0/0"
 
-        r = request_retry("GET", url)
-        if not r:
+        r = session.get(url, timeout=TIMEOUT)
+        data = r.json()
+
+        if not data.get("status"):
             break
 
-        data = r.json()
         itens = data.get("itens", [])
-
         lista.extend(itens)
 
-        log(f"📄 dep {dep} offset {offset} total {len(lista)}")
+        log(f"📦 dep {dep} total {len(lista)}")
 
         if data.get("final"):
             break
@@ -173,47 +145,27 @@ def get_dep(dep):
 
 def get_all():
     tudo = []
-
     for dep in MAPA_DEPARTAMENTOS.keys():
-        log(f"📦 dep {dep}")
         tudo.extend(get_dep(dep))
-
-    log(f"📊 TOTAL {len(tudo)}")
     return tudo
 
-# ================= ENVIO =================
+# ================= WOO =================
 
-def enviar(prod, sku, cache, cats):
-
-    dep = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
-    sub = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"])
-
-    if dep not in cats:
-        cats[dep] = cria_cat(dep)
-
-    cat_id = cats[dep]
-
-    if sub:
-        if sub not in cats:
-            cats[sub] = cria_cat(sub, parent=cat_id)
-        cat_id = cats[sub]
-
+def enviar(prod):
     payload = {
         "name": prod["name"],
         "regular_price": prod["price"],
-        "sku": sku,
+        "sku": prod["sku"],
         "stock_quantity": prod["stock"],
         "manage_stock": True,
-        "categories": [{"id": cat_id}],
         "images": prod["images"]
     }
 
-    if sku in cache:
-        request_retry("PUT", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-        log(f"♻️ {sku}")
-    else:
-        request_retry("POST", URL_WOO, auth=(CK, CS), json=payload)
-        log(f"🆕 {sku}")
+    try:
+        requests.post(URL_WOO, auth=(CK, CS), json=payload)
+        log(f"🆕 {prod['sku']}")
+    except:
+        log(f"❌ erro envio {prod['sku']}")
 
 # ================= MAIN =================
 
@@ -221,26 +173,25 @@ def executar():
 
     log("🚀 inicio")
 
-    cache = get_woo()
-    cats = get_cats()
-    cache_local = load_cache()
+    login()
 
+    cache = load_cache()
     produtos = get_all()
 
     def proc(p):
 
-        sku = p["codigo"]
         nome = p["produto"]
 
         if bloqueado(nome):
             return
 
+        sku = p["codigo"]
+
         prod = {
             "name": nome,
             "price": str(round(float(p["precovenda"]), 2)),
+            "sku": sku,
             "stock": int(p["saldo"]),
-            "dep": p.get("iddepartamento"),
-            "subdep": p.get("idsubdepartamento"),
             "images": []
         }
 
@@ -250,13 +201,13 @@ def executar():
             except:
                 pass
 
-        old = cache_local.get(sku)
+        old = cache.get(sku)
         if old and old["price"] == prod["price"] and old["stock"] == prod["stock"]:
             return
 
-        enviar(prod, sku, cache, cats)
+        enviar(prod)
 
-        cache_local[sku] = {
+        cache[sku] = {
             "price": prod["price"],
             "stock": prod["stock"]
         }
@@ -264,7 +215,7 @@ def executar():
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         ex.map(proc, produtos)
 
-    save_cache(cache_local)
+    save_cache(cache)
 
     log("✅ fim")
 
