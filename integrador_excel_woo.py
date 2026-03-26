@@ -89,6 +89,20 @@ def log(msg):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"{datetime.now()} - {msg}\n")
 
+# ================= RETRY =================
+
+def request_com_retry(url, tentativas=3):
+    for tentativa in range(tentativas):
+        try:
+            r = session.get(url, timeout=TIMEOUT)
+            return r
+        except Exception:
+            log(f"⚠️ tentativa {tentativa+1} falhou: {url}")
+            time.sleep(2)
+
+    log(f"❌ falhou definitivo: {url}")
+    return None
+
 # ================= LOGIN =================
 
 def login():
@@ -117,11 +131,13 @@ def login():
 def buscar_skus():
     log("🔎 buscando SKUs...")
 
+    r = request_com_retry(BUSCA_URL)
+    if not r:
+        return []
+
     try:
-        r = session.get(BUSCA_URL, timeout=TIMEOUT)
         data = r.json()
-    except Exception as e:
-        log(f"❌ erro ao buscar SKUs: {e}")
+    except:
         return []
 
     skus = []
@@ -129,11 +145,14 @@ def buscar_skus():
     for item in data.get("itens", []):
         idproduto = item.get("idproduto")
 
-        try:
-            url = f"{BASE}/produto/detalhe/{EMPRESA}/{idproduto}/0/0"
-            r2 = session.get(url, timeout=TIMEOUT)
-            detalhe = r2.json()["itens"][0]
+        url = f"{BASE}/produto/detalhe/{EMPRESA}/{idproduto}/0/0"
+        r2 = request_com_retry(url)
 
+        if not r2:
+            continue
+
+        try:
+            detalhe = r2.json()["itens"][0]
             grades = detalhe.get("grades", {}).get("itens", [])
 
             if grades:
@@ -142,8 +161,7 @@ def buscar_skus():
             else:
                 skus.append(f"{idproduto}.0.0")
 
-        except Exception as e:
-            log(f"⚠️ erro produto {idproduto}: {e}")
+        except:
             continue
 
     log(f"📦 TOTAL SKUS: {len(skus)}")
@@ -152,13 +170,16 @@ def buscar_skus():
 # ================= DETALHE =================
 
 def get_detalhe(sku):
+    p = sku.split(".")
+    url = f"{BASE}/produto/detalhe/{EMPRESA}/{p[0]}/{p[1]}/{p[2]}"
+
+    r = request_com_retry(url)
+    if not r:
+        return None
+
     try:
-        p = sku.split(".")
-        url = f"{BASE}/produto/detalhe/{EMPRESA}/{p[0]}/{p[1]}/{p[2]}"
-        r = session.get(url, timeout=TIMEOUT)
         return r.json()["itens"][0]
-    except Exception as e:
-        log(f"⚠️ erro detalhe {sku}: {e}")
+    except:
         return None
 
 # ================= FILTRO =================
@@ -187,8 +208,7 @@ def produto_existe(sku):
         if data:
             return data[0]["id"]
         return None
-    except Exception as e:
-        log(f"⚠️ erro consulta woo {sku}: {e}")
+    except:
         return None
 
 def enviar(prod):
