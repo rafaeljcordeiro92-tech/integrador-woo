@@ -1,11 +1,11 @@
 import requests
-import json
-import re
 import time
+import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask
-import threading
+from flask import Flask, jsonify, send_from_directory
+
+app = Flask(__name__)
 
 # ================= CONFIG =================
 
@@ -22,18 +22,11 @@ URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-CACHE_FILE = "cache.json"
+INTERVALO = 300
 TIMEOUT = 60
 MAX_WORKERS = 2
-INTERVALO = 300
 
 session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": BASE,
-    "Origin": BASE
-})
 
 # ================= MAPAS =================
 
@@ -82,176 +75,139 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= LOG =================
+# ================= STATUS =================
+
+STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "zerados": 0, "erros": 0}
+LOGS = []
 
 def log(msg):
     print(msg)
-    with open("log.txt", "a", encoding="utf-8") as f:
-        f.write(f"{datetime.now()} - {msg}\n")
-
-# ================= RETRY =================
-
-def request_com_retry(url, tentativas=3):
-    for tentativa in range(tentativas):
-        try:
-            return session.get(url, timeout=TIMEOUT)
-        except:
-            log(f"⚠️ tentativa {tentativa+1} falhou: {url}")
-            time.sleep(2)
-    return None
+    LOGS.append(f"{datetime.now()} - {msg}")
+    if len(LOGS) > 300:
+        LOGS.pop(0)
 
 # ================= LOGIN =================
 
 def login():
     try:
-        r = session.post(LOGIN_URL, json={
-            "cpf": USUARIO,
-            "senha": SENHA,
-            "idempresa": EMPRESA
-        }, timeout=TIMEOUT)
-
-        if not r.json().get("status"):
-            log("❌ login falhou")
-            return False
-
-        log("✅ login OK")
-        return True
+        r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
+        return r.json().get("status")
     except:
         return False
 
-# ================= DETALHE =================
-
-def get_detalhe(sku):
-    try:
-        p = sku.split(".")
-        url = f"{BASE}/produto/detalhe/{EMPRESA}/{p[0]}/{p[1]}/{p[2]}"
-        r = request_com_retry(url)
-        if not r:
-            return None
-        return r.json()["itens"][0]
-    except:
-        return None
-
 # ================= WOO =================
 
-def produto_existe(sku):
+def get_id(sku):
     r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
     data = r.json()
     return data[0]["id"] if data else None
 
 def enviar(prod):
 
-    prod_id = produto_existe(prod["sku"])
+    prod_id = get_id(prod["sku"])
 
     payload = {
         "name": prod["name"],
-        "regular_price": prod["price"],
         "sku": prod["sku"],
+        "regular_price": str(prod["price"]),
         "stock_quantity": int(prod["stock"]),
         "manage_stock": True,
-        "stock_status": "instock" if int(prod["stock"]) > 0 else "outofstock",
+        "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
         "categories": [
             {"name": prod["departamento"]},
             {"name": prod["categoria"]}
-        ],
-        "images": prod["images"]
+        ]
     }
 
     if prod_id:
-        requests.put(
-            f"{URL_WOO}/{prod_id}",
-            auth=(CK, CS),
-            json=payload,
-            params={"force": True}
-        )
-        log(f"♻️ atualizado {prod['sku']} estoque {prod['stock']}")
+        requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload, params={"force": True})
+        STATUS["atualizados"] += 1
+        log(f"♻️ {prod['sku']} -> {prod['stock']}")
     else:
         requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        log(f"🆕 criado {prod['sku']}")
+        STATUS["criados"] += 1
+        log(f"🆕 {prod['sku']}")
 
 # ================= EXECUÇÃO =================
 
 def executar():
 
-    log("🚀 inicio")
+    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "zerados": 0, "erros": 0})
 
     if not login():
+        log("❌ login falhou")
         return
 
-    r = request_com_retry(BUSCA_URL)
-    if not r:
-        return
-
+    r = session.get(BUSCA_URL)
     lista = r.json().get("itens", [])
-    skus_fornecedor = set()
+
+    STATUS["total"] = len(lista)
+    skus = set()
 
     def processar(item):
 
-        idp = item.get("idproduto")
-        gx = item.get("idgradex", 0)
-        gy = item.get("idgradey", 0)
+        sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
+        skus.add(sku)
 
-        sku = f"{idp}.{gx}.{gy}"
-        skus_fornecedor.add(sku)
-
-        data = get_detalhe(sku)
-        if not data:
-            return
-
-        idcat = int(data.get("idcategoria", 0))
+        idcat = int(item.get("idcategoria", 0))
 
         categoria = MAPA_SUBDEPARTAMENTOS.get(idcat, "GERAL")
         departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
 
         prod = {
-            "name": data["produto"],
-            "price": str(round(float(data["precovenda"]), 2)),
+            "name": item.get("produto"),
             "sku": sku,
+            "price": item.get("precovenda", 0),
             "stock": int(item.get("saldo", 0)),
             "categoria": categoria,
-            "departamento": departamento,
-            "images": []
+            "departamento": departamento
         }
-
-        for img in data.get("fotos", {}).get("imagem", []):
-            try:
-                prod["images"].append({"src": img["grande"][0]})
-            except:
-                pass
 
         enviar(prod)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         ex.map(processar, lista)
 
-    # 🔥 ZERAR PRODUTOS
-
+    # zerar
     r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100})
     for p in r.json():
-        if p.get("sku") not in skus_fornecedor:
-            requests.put(
-                f"{URL_WOO}/{p['id']}",
-                auth=(CK, CS),
-                json={"stock_quantity": 0, "manage_stock": True}
-            )
-            log(f"❌ zerado {p['sku']}")
+        if p.get("sku") not in skus:
+            requests.put(f"{URL_WOO}/{p['id']}", auth=(CK, CS), json={"stock_quantity": 0})
+            STATUS["zerados"] += 1
+            log(f"❌ zerado {p.get('sku')}")
 
+    STATUS["rodando"] = False
     log("✅ finalizado")
 
 # ================= LOOP =================
-
-app = Flask(__name__)
 
 def loop():
     while True:
         executar()
         time.sleep(INTERVALO)
 
+# ================= ROTAS =================
+
 @app.route("/")
-def home():
-    return "Integrador rodando 🚀"
+def dashboard():
+    return send_from_directory("dashboard", "index.html")
+
+@app.route("/status")
+def status():
+    return jsonify(STATUS)
+
+@app.route("/logs")
+def logs():
+    return jsonify(LOGS)
+
+@app.route("/executar")
+def executar_manual():
+    threading.Thread(target=executar).start()
+    return "ok"
+
+# ================= START =================
 
 if __name__ == "__main__":
     threading.Thread(target=loop, daemon=True).start()
-    log("🔥 Loop iniciado")
+    log("🔥 iniciado")
     app.run(host="0.0.0.0", port=8080)
