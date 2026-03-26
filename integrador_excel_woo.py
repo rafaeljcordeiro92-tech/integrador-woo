@@ -35,23 +35,24 @@ def log(msg):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"{datetime.now()} - {msg}\n")
 
-# ================= SKU LIMPEZA =================
+# ================= SKU =================
 
-def limpar_sku(sku):
+def limpar_sku_url(sku):
     return re.sub(r"[^0-9.]", "", str(sku)).strip()
 
-# ================= FILTRO MM FINAL DEFINITIVO =================
+# ================= FILTRO MM (FINAL - NOME) =================
 
 def produto_bloqueado(prod):
-    desc = prod.get("descricao", "")
+    nome = prod.get("name", "")
 
-    if not desc:
+    if not nome:
         return False
 
-    # normaliza texto
-    texto = desc.upper().replace("\n", " ").replace("\r", " ")
+    texto = nome.upper()
 
-    # quebra em palavras
+    # mantém apenas letras e espaços
+    texto = re.sub(r'[^A-Z\s]', ' ', texto)
+
     palavras = texto.split()
 
     for i, p in enumerate(palavras):
@@ -191,10 +192,10 @@ def criar_categoria(nome, parent=None):
 
 # ================= PRODUTO =================
 
-def pegar(session, sku):
+def pegar(session, sku_limpo):
     try:
         delay()
-        r = session.get(montar_url(sku), timeout=10)
+        r = session.get(montar_url(sku_limpo), timeout=10)
 
         if r.status_code != 200:
             return None
@@ -205,8 +206,16 @@ def pegar(session, sku):
 
         p = data["itens"][0]
 
+        # DETECTAR ESTRELA
+        tem_estrela = "fa-star" in json.dumps(p)
+
+        nome = p["produto"]
+
+        if tem_estrela:
+            nome = "⭐ " + nome
+
         return {
-            "name": p["produto"],
+            "name": nome,
             "price": str(round(float(p["precovenda"]), 2)),
             "stock": int(p["saldo"]),
             "descricao": p.get("descricaotecnica", ""),
@@ -216,13 +225,13 @@ def pegar(session, sku):
         }
 
     except Exception as e:
-        log(f"❌ erro produto {sku}: {e}")
+        log(f"❌ erro produto {sku_limpo}: {e}")
         registrar_evento("erros")
         return None
 
 # ================= ENVIO =================
 
-def enviar(prod, sku, cache, cats, cache_local):
+def enviar(prod, sku_original, cache, cats, cache_local):
     dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
     sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"], None)
 
@@ -236,7 +245,7 @@ def enviar(prod, sku, cache, cats, cache_local):
             cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
         cat_id = cats[sub_nome]
 
-    antigo = cache_local.get(sku)
+    antigo = cache_local.get(sku_original)
 
     if antigo:
         if antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
@@ -245,7 +254,7 @@ def enviar(prod, sku, cache, cats, cache_local):
     payload = {
         "name": prod["name"],
         "regular_price": prod["price"],
-        "sku": sku,
+        "sku": sku_original,
         "stock_quantity": prod["stock"],
         "manage_stock": True,
         "categories": [{"id": cat_id}],
@@ -254,20 +263,20 @@ def enviar(prod, sku, cache, cats, cache_local):
     }
 
     try:
-        if sku in cache:
-            requests.put(f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-            log(f"♻️ atualização: {sku}")
+        if sku_original in cache:
+            requests.put(f"{URL_WOO}/{cache[sku_original]}", auth=(CK, CS), json=payload)
+            log(f"♻️ atualização: {sku_original}")
             registrar_evento("updates")
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
-            log(f"🆕 criação: {sku}")
+            log(f"🆕 criação: {sku_original}")
             registrar_evento("novos")
 
     except Exception as e:
-        log(f"❌ erro envio: {sku} - {e}")
+        log(f"❌ erro envio: {sku_original} - {e}")
         registrar_evento("erros")
 
-    cache_local[sku] = {
+    cache_local[sku_original] = {
         "price": prod["price"],
         "stock": prod["stock"]
     }
@@ -291,17 +300,18 @@ def executar():
 
     for sku in skus[:SKUS_POR_CICLO]:
 
-        sku = limpar_sku(sku)
+        sku_original = sku
+        sku_limpo = limpar_sku_url(sku)
 
-        prod = pegar(s, sku)
+        prod = pegar(s, sku_limpo)
         if not prod:
             continue
 
         if produto_bloqueado(prod):
-            log(f"🚫 bloqueado (MM isolado): {sku} - {prod['name']}")
+            log(f"🚫 bloqueado (MM isolado): {sku_original} - {prod['name']}")
             continue
 
-        enviar(prod, sku, cache, cats, cache_local)
+        enviar(prod, sku_original, cache, cats, cache_local)
 
     salvar_cache_local(cache_local)
 
