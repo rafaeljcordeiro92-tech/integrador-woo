@@ -9,13 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 URL = "https://portal.juntossomosimbativeis.com.br"
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
-URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 TIMEOUT = 20
-MAX_WORKERS = 10
+MAX_WORKERS = 5
 
 CACHE_FILE = "cache_local.json"
 DASH_FILE = "dashboard.json"
@@ -73,46 +72,19 @@ def get_produtos():
 
     return produtos
 
-def get_categorias():
-    cats = {}
-    page = 1
-
-    while True:
-        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page":100,"page":page})
-        if r.status_code != 200:
-            break
-
-        data = r.json()
-        if not data:
-            break
-
-        for c in data:
-            cats[c["name"]] = c["id"]
-
-        page += 1
-
-    return cats
-
-def criar_categoria(nome, parent=None):
-    payload = {"name": nome}
-    if parent:
-        payload["parent"] = parent
-
-    r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
-    return r.json()["id"]
-
 # ================= NOVA API =================
 
 def get_todos_produtos():
     produtos = []
     pagina = 1
+    MAX_PAGINAS = 20
 
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json"
     }
 
-    while True:
+    while pagina <= MAX_PAGINAS:
         url = f"{URL}/produto/getPorCodigoNome/%20/{pagina}/272"
 
         r = requests.get(url, headers=headers, timeout=TIMEOUT)
@@ -121,15 +93,25 @@ def get_todos_produtos():
             log(f"❌ erro página {pagina}")
             break
 
-        data = r.json()
-        itens = data.get("itens", [])
+        try:
+            data = r.json()
+        except:
+            log("❌ erro ao converter JSON")
+            break
+
+        # 🔥 leitura inteligente (resolve seu problema)
+        if isinstance(data, list):
+            itens = data
+        else:
+            itens = data.get("itens") or data.get("data") or data.get("produtos") or []
 
         if not itens:
+            log(f"⚠️ página {pagina} sem itens")
             break
 
         produtos.extend(itens)
 
-        log(f"📄 página {pagina} | total acumulado {len(produtos)}")
+        log(f"📄 página {pagina} | total {len(produtos)}")
 
         pagina += 1
 
@@ -176,16 +158,19 @@ def executar():
 
     def processar(p):
         try:
-            sku = p["codigo"]
-            nome = p["produto"]
+            sku = p.get("codigo") or p.get("sku")
+            nome = p.get("produto") or p.get("nome")
+
+            if not sku or not nome:
+                return
 
             if produto_bloqueado(nome):
                 return
 
             prod = {
                 "name": nome,
-                "price": str(round(float(p["precovenda"]), 2)),
-                "stock": int(p["saldo"]),
+                "price": str(round(float(p.get("precovenda", 0)), 2)),
+                "stock": int(p.get("saldo", 0)),
                 "images": []
             }
 
@@ -229,7 +214,7 @@ def executar():
 
         except Exception as e:
             dashboard["erros"] += 1
-            log(f"❌ erro {p.get('codigo')}: {e}")
+            log(f"❌ erro {p}: {e}")
 
         finally:
             dashboard["processados"] += 1
