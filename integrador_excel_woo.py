@@ -20,53 +20,6 @@ MAX_WORKERS = 10
 CACHE_FILE = "cache_local.json"
 DASH_FILE = "dashboard.json"
 
-# ================= MAPAS =================
-
-MAPA_DEPARTAMENTOS = {
-    1010000000: "ELETRO",
-    1020000000: "MÓVEIS",
-    1050000000: "ESPORTE E LAZER",
-    1030000000: "INFORMÁTICA",
-    1040000000: "TELEF. CELULAR",
-    1060000000: "UTILIDADES",
-    1080000000: "CAMA, MESA E BANHO",
-    1090000000: "TAPETES",
-    1150000000: "LINHA AUTOMOTIVA",
-    1180000000: "LINHA ALTA",
-    1190000000: "COLCHÕES",
-    1170000000: "DECORAÇÃO"
-}
-
-MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-    1181020000: "COPA",
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-    1081010000: "CAMA",
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
-}
-
 # ================= LOG =================
 
 def log(msg):
@@ -148,66 +101,50 @@ def criar_categoria(nome, parent=None):
     r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
     return r.json()["id"]
 
-# ================= FORNECEDOR =================
-
-DEPARTAMENTOS = list(MAPA_DEPARTAMENTOS.keys())
-
-def get_produtos_departamento(dep):
-    produtos = []
-    offset = 0
-
-    while True:
-        url = f"{URL}/produto/getPorDepartamento/{dep}/272/{offset}/0/0"
-
-        r = requests.get(url, timeout=TIMEOUT)
-        data = r.json()
-
-        itens = data.get("itens", [])
-        produtos.extend(itens)
-
-        log(f"📄 dep {dep} | offset {offset} | total {len(produtos)}")
-
-        if data.get("final"):
-            break
-
-        offset += data.get("offset", 12)
-
-    return produtos
+# ================= NOVA API =================
 
 def get_todos_produtos():
-    todos = []
+    produtos = []
+    pagina = 1
 
-    for dep in DEPARTAMENTOS:
-        log(f"📦 carregando departamento {dep}")
-        produtos = get_produtos_departamento(dep)
-        todos.extend(produtos)
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+    }
 
-    log(f"📊 total fornecedor: {len(todos)}")
-    return todos
+    while True:
+        url = f"{URL}/produto/getPorCodigoNome/%20/{pagina}/272"
+
+        r = requests.get(url, headers=headers, timeout=TIMEOUT)
+
+        if r.status_code != 200:
+            log(f"❌ erro página {pagina}")
+            break
+
+        data = r.json()
+        itens = data.get("itens", [])
+
+        if not itens:
+            break
+
+        produtos.extend(itens)
+
+        log(f"📄 página {pagina} | total acumulado {len(produtos)}")
+
+        pagina += 1
+
+    log(f"📊 total fornecedor: {len(produtos)}")
+    return produtos
 
 # ================= ENVIO =================
 
-def enviar(prod, sku, cache, cats):
-    dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
-    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"])
-
-    if dep_nome not in cats:
-        cats[dep_nome] = criar_categoria(dep_nome)
-
-    cat_id = cats[dep_nome]
-
-    if sub_nome:
-        if sub_nome not in cats:
-            cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
-        cat_id = cats[sub_nome]
-
+def enviar(prod, sku, cache):
     payload = {
         "name": prod["name"],
         "regular_price": prod["price"],
         "sku": sku,
         "stock_quantity": prod["stock"],
         "manage_stock": True,
-        "categories": [{"id": cat_id}],
         "images": prod["images"]
     }
 
@@ -224,7 +161,6 @@ def executar():
     log("🚀 ciclo iniciado")
 
     cache = get_produtos()
-    cats = get_categorias()
     cache_local = carregar_cache()
 
     produtos = get_todos_produtos()
@@ -250,8 +186,6 @@ def executar():
                 "name": nome,
                 "price": str(round(float(p["precovenda"]), 2)),
                 "stock": int(p["saldo"]),
-                "dep": p.get("iddepartamento"),
-                "subdep": p.get("idsubdepartamento"),
                 "images": []
             }
 
@@ -276,7 +210,7 @@ def executar():
                 status = "igual"
 
             if status in ["novo", "atualizado"]:
-                enviar(prod, sku, cache, cats)
+                enviar(prod, sku, cache)
 
             dashboard["produtos"].append({
                 "sku": sku,
@@ -313,6 +247,7 @@ def executar():
 
     log("✅ ciclo finalizado")
 
+# ================= START =================
 
 if __name__ == "__main__":
     executar()
