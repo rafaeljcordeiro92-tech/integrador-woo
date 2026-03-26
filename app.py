@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string
 import json
 import threading
 import time
@@ -10,26 +10,20 @@ app = Flask(__name__)
 # ================= LOOP BACKGROUND =================
 
 def loop():
-    time.sleep(5)  # deixa o servidor subir primeiro
+    time.sleep(5)  # deixa o servidor subir
 
     while True:
         try:
-            print("🚀 Iniciando execução do integrador...")
+            print("🚀 Rodando integrador...")
             executar()
-            print("✅ Execução finalizada")
+            print("✅ Finalizado")
         except Exception as e:
-            print("❌ Erro no loop:", e)
+            print("❌ Erro:", e)
 
-        time.sleep(1200)  # 20 min
+        time.sleep(1200)
 
-def start_background():
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
-
-# inicia depois que o Flask sobe
-@app.before_first_request
-def iniciar():
-    start_background()
+# 🔥 inicia direto (SEM before_first_request)
+threading.Thread(target=loop, daemon=True).start()
 
 # ================= HTML =================
 
@@ -47,58 +41,17 @@ body { font-family:Arial;background:#0f172a;color:white;padding:20px }
   border-radius:10px;
   margin:10px;
   display:inline-block;
-  min-width:120px;
-  text-align:center;
 }
 
-button {
-  padding:10px;
-  margin:5px;
-  border:none;
-  border-radius:5px;
-  cursor:pointer;
-  background:#334155;
-  color:white;
-}
-
-.progress {
-  background:#1e293b;
-  border-radius:10px;
-  margin-bottom:10px;
-}
-
-.bar {
-  height:20px;
-  background:#22c55e;
-  border-radius:10px;
-}
-
-table {
-  width:100%;
-  margin-top:20px;
-  border-collapse: collapse;
-}
-
-td,th {
-  padding:8px;
-  border-bottom:1px solid #334155;
-}
-
-.novo { color:#22c55e }
-.atualizado { color:#3b82f6 }
-.erro { color:#ef4444 }
-
-.up { color:#22c55e }
-.down { color:#ef4444 }
-
-.zero { background:#7f1d1d }
+.progress { background:#1e293b;border-radius:10px }
+.bar { height:20px;background:#22c55e;border-radius:10px }
 </style>
 
 </head>
 
 <body>
 
-<h1>🚀 ERP PRO DASHBOARD</h1>
+<h1>🚀 ERP PRO</h1>
 
 <div class="progress">
 <div class="bar" id="bar"></div>
@@ -112,33 +65,11 @@ td,th {
 <div class="card">❌ <span id="erros">0</span></div>
 </div>
 
-<div>
-<button onclick="filtrar('todos')">Todos</button>
-<button onclick="filtrar('novo')">Novos</button>
-<button onclick="filtrar('atualizado')">Atualizados</button>
-<button onclick="filtrar('erro')">Erros</button>
-</div>
-
-<table>
-<thead>
-<tr>
-<th>Produto</th>
-<th>Preço</th>
-<th>Estoque</th>
-<th>Status</th>
-</tr>
-</thead>
-<tbody id="tabela"></tbody>
-</table>
-
 <script>
-let dados = []
-
 function atualizar(){
 fetch('/data')
 .then(r => r.json())
 .then(d => {
-
 if(!d.produtos) return
 
 document.getElementById('novos').innerText = d.novos
@@ -147,50 +78,6 @@ document.getElementById('erros').innerText = d.erros
 
 document.getElementById('bar').style.width = d.percentual + "%"
 document.getElementById('percent').innerText = d.percentual + "%"
-
-dados = d.produtos
-render("todos")
-})
-}
-
-function filtrar(tipo){
-render(tipo)
-}
-
-function render(tipo){
-let tbody = document.getElementById("tabela")
-tbody.innerHTML = ""
-
-dados
-.filter(p => tipo === "todos" || p.status === tipo)
-.slice(-200)
-.forEach(p => {
-
-let preco = p.preco_novo
-let precoClass = ""
-
-if(p.preco_antigo){
-if(p.preco_novo > p.preco_antigo) precoClass = "up"
-if(p.preco_novo < p.preco_antigo) precoClass = "down"
-preco = p.preco_antigo + " → " + p.preco_novo
-}
-
-let estoque = p.estoque_novo
-let estoqueClass = ""
-
-if(p.estoque_antigo != null && p.estoque_antigo != p.estoque_novo){
-estoque = p.estoque_antigo + " → " + p.estoque_novo
-}
-
-if(p.estoque_novo == 0) estoqueClass = "zero"
-
-tbody.innerHTML += `
-<tr class="${estoqueClass}">
-<td>${p.nome}</td>
-<td class="${precoClass}">${preco}</td>
-<td>${estoque}</td>
-<td class="${p.status}">${p.status}</td>
-</tr>`
 })
 }
 
