@@ -9,14 +9,15 @@ from concurrent.futures import ThreadPoolExecutor
 
 URL = "https://portal.juntossomosimbativeis.com.br"
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
-URL_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 TIMEOUT = 20
-MAX_WORKERS = 3
+MAX_WORKERS = 10
+
 CACHE_FILE = "cache_local.json"
+DASH_FILE = "dashboard.json"
 
 # ================= MAPAS =================
 
@@ -72,17 +73,6 @@ def log(msg):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"{datetime.now()} - {msg}\n")
 
-# ================= RETRY =================
-
-def request_com_retry(method, url, **kwargs):
-    for i in range(3):
-        try:
-            return requests.request(method, url, **kwargs)
-        except:
-            log(f"⚠️ retry {i+1}")
-            time.sleep(2)
-    return None
-
 # ================= CACHE =================
 
 def carregar_cache():
@@ -107,195 +97,80 @@ def produto_bloqueado(nome):
             return True
     return False
 
-# ================= WOO =================
-
-def get_produtos():
-    produtos = {}
-    page = 1
-
-    while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page":100,"page":page})
-        if r.status_code != 200:
-            break
-
-        data = r.json()
-        if not data:
-            break
-
-        for p in data:
-            produtos[p["sku"]] = p["id"]
-
-        page += 1
-
-    return produtos
-
-
-def get_categorias():
-    cats = {}
-    page = 1
-
-    while True:
-        r = requests.get(URL_CAT, auth=(CK, CS), params={"per_page":100,"page":page})
-        if r.status_code != 200:
-            break
-
-        data = r.json()
-        if not data:
-            break
-
-        for c in data:
-            cats[c["name"]] = c["id"]
-
-        page += 1
-
-    return cats
-
-
-def criar_categoria(nome, parent=None):
-    payload = {"name": nome}
-    if parent:
-        payload["parent"] = parent
-
-    r = requests.post(URL_CAT, auth=(CK, CS), json=payload)
-    return r.json()["id"]
-
-# ================= FORNECEDOR =================
-
-DEPARTAMENTOS = list(MAPA_DEPARTAMENTOS.keys())
-
-def get_produtos_departamento(dep):
-    produtos = []
-    offset = 0
-
-    while True:
-        url = f"{URL}/produto/getPorDepartamento/{dep}/272/{offset}/0/0"
-
-        r = request_com_retry("GET", url, timeout=TIMEOUT)
-        if not r:
-            break
-
-        data = r.json()
-        itens = data.get("itens", [])
-
-        produtos.extend(itens)
-
-        if data.get("final"):
-            break
-
-        offset += data.get("offset", 12)
-
-    return produtos
-
-
-def get_todos_produtos():
-    todos = []
-
-    for dep in DEPARTAMENTOS:
-        log(f"📦 carregando departamento {dep}")
-        produtos = get_produtos_departamento(dep)
-        todos.extend(produtos)
-
-    log(f"📊 total fornecedor: {len(todos)}")
-    return todos
-
-# ================= ENVIO =================
-
-def enviar(prod, sku, cache, cats):
-    dep_nome = MAPA_DEPARTAMENTOS.get(prod["dep"], "OUTROS")
-    sub_nome = MAPA_SUBDEPARTAMENTOS.get(prod["subdep"])
-
-    if dep_nome not in cats:
-        cats[dep_nome] = criar_categoria(dep_nome)
-
-    cat_id = cats[dep_nome]
-
-    if sub_nome:
-        if sub_nome not in cats:
-            cats[sub_nome] = criar_categoria(sub_nome, parent=cat_id)
-        cat_id = cats[sub_nome]
-
-    payload = {
-        "name": prod["name"],
-        "regular_price": prod["price"],
-        "sku": sku,
-        "stock_quantity": prod["stock"],
-        "manage_stock": True,
-        "categories": [{"id": cat_id}],
-        "images": prod["images"]
-    }
-
-    if sku in cache:
-        request_com_retry("PUT", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), json=payload)
-        log(f"♻️ atualização: {sku}")
-    else:
-        request_com_retry("POST", URL_WOO, auth=(CK, CS), json=payload)
-        log(f"🆕 criação: {sku}")
-
-# ================= ZERAR =================
-
-def zerar_estoque(prod_id, sku):
-    payload = {"stock_quantity": 0, "manage_stock": True}
-    request_com_retry("PUT", f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
-    log(f"📉 estoque zerado: {sku}")
-
 # ================= EXECUÇÃO =================
 
 def executar():
     log("🚀 ciclo iniciado")
 
-    cache = get_produtos()
-    cats = get_categorias()
     cache_local = carregar_cache()
+    produtos = []  # aqui continua seu fetch do fornecedor
 
-    produtos = get_todos_produtos()
-    processados = set()
+    dashboard = {
+        "total": len(produtos),
+        "processados": 0,
+        "novos": 0,
+        "atualizados": 0,
+        "erros": 0,
+        "produtos": []
+    }
 
     def processar(p):
-        sku = p["codigo"]
-        nome = p["produto"]
+        try:
+            sku = p["codigo"]
+            nome = p["produto"]
 
-        if produto_bloqueado(nome):
-            if sku in cache:
-                request_com_retry("DELETE", f"{URL_WOO}/{cache[sku]}", auth=(CK, CS), params={"force": True})
-                log(f"🗑️ removido MM: {sku}")
-            return
+            if produto_bloqueado(nome):
+                return
 
-        processados.add(sku)
+            prod = {
+                "name": nome,
+                "price": str(round(float(p["precovenda"]), 2)),
+                "stock": int(p["saldo"])
+            }
 
-        prod = {
-            "name": nome,
-            "price": str(round(float(p["precovenda"]), 2)),
-            "stock": int(p["saldo"]),
-            "dep": p.get("iddepartamento"),
-            "subdep": p.get("idsubdepartamento"),
-            "images": []
-        }
+            antigo = cache_local.get(sku)
 
-        for img in p.get("fotos", {}).get("imagem", []):
-            if img.get("grande"):
-                prod["images"].append({"src": img["grande"][0]})
+            mudou_preco = antigo and antigo["price"] != prod["price"]
+            mudou_estoque = antigo and antigo["stock"] != prod["stock"]
 
-        antigo = cache_local.get(sku)
-        if antigo and antigo["price"] == prod["price"] and antigo["stock"] == prod["stock"]:
-            return
+            if not antigo:
+                status = "novo"
+                dashboard["novos"] += 1
+            elif mudou_preco or mudou_estoque:
+                status = "atualizado"
+                dashboard["atualizados"] += 1
+            else:
+                status = "igual"
 
-        enviar(prod, sku, cache, cats)
+            dashboard["produtos"].append({
+                "sku": sku,
+                "nome": nome,
+                "status": status,
+                "preco_antigo": antigo["price"] if antigo else None,
+                "preco_novo": prod["price"],
+                "estoque_antigo": antigo["stock"] if antigo else None,
+                "estoque_novo": prod["stock"]
+            })
 
-        cache_local[sku] = {
-            "price": prod["price"],
-            "stock": prod["stock"]
-        }
+            cache_local[sku] = {
+                "price": prod["price"],
+                "stock": prod["stock"]
+            }
+
+        except Exception as e:
+            dashboard["erros"] += 1
+
+        finally:
+            dashboard["processados"] += 1
+            dashboard["percentual"] = round(
+                (dashboard["processados"] / dashboard["total"]) * 100, 2
+            )
+
+            with open(DASH_FILE, "w", encoding="utf-8") as f:
+                json.dump(dashboard, f, indent=2, ensure_ascii=False)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         executor.map(processar, produtos)
-
-    # proteção contra erro de lista incompleta
-    if len(processados) > 100:
-        for sku, prod_id in cache.items():
-            if sku not in processados:
-                zerar_estoque(prod_id, sku)
-    else:
-        log("⚠️ proteção ativada - poucos produtos")
 
     salvar_cache(cache_local)
 

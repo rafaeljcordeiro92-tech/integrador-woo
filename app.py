@@ -1,155 +1,201 @@
-from flask import Flask, render_template_string, redirect
+from flask import Flask, render_template_string, jsonify
+import json
 import threading
 import time
 from datetime import datetime
 from integrador_excel_woo import executar
-from stats import carregar_stats
 
 app = Flask(__name__)
 
-ultima_execucao = None
-proxima_execucao = None
-status = "Iniciando..."
+# ================= LOOP =================
 
-INTERVALO = 1200  # 20 min
+def loop():
+    while True:
+        executar()
+        time.sleep(1200)
+
+threading.Thread(target=loop, daemon=True).start()
+
+# ================= HTML =================
 
 HTML = """
 <html>
 <head>
-<title>Painel ERP</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<title>ERP PRO</title>
 
-<script>
-function atualizarContador() {
-    const proxima = new Date("{{proxima_execucao}}").getTime();
+<style>
+body { font-family:Arial;background:#0f172a;color:white;padding:20px }
 
-    setInterval(() => {
-        const agora = new Date().getTime();
-        const diff = proxima - agora;
-
-        if (diff > 0) {
-            const min = Math.floor(diff / 60000);
-            const sec = Math.floor((diff % 60000) / 1000);
-            document.getElementById("contador").innerText = min + "m " + sec + "s";
-        } else {
-            document.getElementById("contador").innerText = "Executando...";
-        }
-    }, 1000);
+.card {
+  background:#1e293b;
+  padding:15px;
+  border-radius:10px;
+  margin:10px;
+  display:inline-block;
+  min-width:120px;
+  text-align:center;
 }
-</script>
+
+button {
+  padding:10px;
+  margin:5px;
+  border:none;
+  border-radius:5px;
+  cursor:pointer;
+  background:#334155;
+  color:white;
+}
+
+.progress {
+  background:#1e293b;
+  border-radius:10px;
+  margin-bottom:10px;
+}
+
+.bar {
+  height:20px;
+  background:#22c55e;
+  border-radius:10px;
+}
+
+table {
+  width:100%;
+  margin-top:20px;
+  border-collapse: collapse;
+}
+
+td,th {
+  padding:8px;
+  border-bottom:1px solid #334155;
+}
+
+.novo { color:#22c55e }
+.atualizado { color:#3b82f6 }
+.erro { color:#ef4444 }
+
+.up { color:#22c55e }
+.down { color:#ef4444 }
+
+.zero { background:#7f1d1d }
+</style>
 
 </head>
 
-<body onload="atualizarContador()" style="font-family:Arial;background:#0f172a;color:white;padding:20px">
+<body>
 
-<h1>🚀 Painel ERP Integrador</h1>
+<h1>🚀 ERP PRO DASHBOARD</h1>
 
-<p><b>Status:</b> {{status}}</p>
-<p><b>Última execução:</b> {{ultima_execucao}}</p>
-<p><b>Próxima execução em:</b> <span id="contador">--</span></p>
-
-<div style="display:flex;gap:20px">
-
-<div style="background:#1e293b;padding:15px;border-radius:10px">
-<h3>📦 Updates</h3>
-<h2>{{updates}}</h2>
+<div class="progress">
+<div class="bar" id="bar"></div>
 </div>
 
-<div style="background:#1e293b;padding:15px;border-radius:10px">
-<h3>🆕 Novos</h3>
-<h2>{{novos}}</h2>
+<p id="percent">0%</p>
+
+<div>
+<div class="card">🆕 <span id="novos">0</span></div>
+<div class="card">♻️ <span id="atualizados">0</span></div>
+<div class="card">❌ <span id="erros">0</span></div>
 </div>
 
-<div style="background:#1e293b;padding:15px;border-radius:10px">
-<h3>⚠️ Erros</h3>
-<h2>{{erros}}</h2>
+<div>
+<button onclick="filtrar('todos')">Todos</button>
+<button onclick="filtrar('novo')">Novos</button>
+<button onclick="filtrar('atualizado')">Atualizados</button>
+<button onclick="filtrar('erro')">Erros</button>
 </div>
 
-</div>
-
-<br>
-
-<form method="post" action="/rodar">
-<button style="padding:10px 20px;font-size:16px">🔄 Rodar agora</button>
-</form>
-
-<br>
-
-<canvas id="grafico"></canvas>
+<table>
+<thead>
+<tr>
+<th>Produto</th>
+<th>Preço</th>
+<th>Estoque</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody id="tabela"></tbody>
+</table>
 
 <script>
-const data = {
-labels: {{labels}},
-datasets: [{
-label: 'Eventos',
-data: {{valores}},
-borderWidth: 2
-}]
-};
+let dados = []
 
-new Chart(document.getElementById('grafico'), {
-type: 'line',
-data: data
-});
+function atualizar(){
+fetch('/data')
+.then(r => r.json())
+.then(d => {
+
+document.getElementById('novos').innerText = d.novos
+document.getElementById('atualizados').innerText = d.atualizados
+document.getElementById('erros').innerText = d.erros
+
+document.getElementById('bar').style.width = d.percentual + "%"
+document.getElementById('percent').innerText = d.percentual + "%"
+
+dados = d.produtos
+render("todos")
+})
+}
+
+function filtrar(tipo){
+render(tipo)
+}
+
+function render(tipo){
+let tbody = document.getElementById("tabela")
+tbody.innerHTML = ""
+
+dados
+.filter(p => tipo === "todos" || p.status === tipo)
+.slice(-200)
+.forEach(p => {
+
+let preco = p.preco_novo
+let precoClass = ""
+
+if(p.preco_antigo){
+if(p.preco_novo > p.preco_antigo) precoClass = "up"
+if(p.preco_novo < p.preco_antigo) precoClass = "down"
+preco = p.preco_antigo + " → " + p.preco_novo
+}
+
+let estoque = p.estoque_novo
+let estoqueClass = ""
+
+if(p.estoque_antigo != null && p.estoque_antigo != p.estoque_novo){
+estoque = p.estoque_antigo + " → " + p.estoque_novo
+}
+
+if(p.estoque_novo == 0) estoqueClass = "zero"
+
+tbody.innerHTML += `
+<tr class="${estoqueClass}">
+<td>${p.nome}</td>
+<td class="${precoClass}">${preco}</td>
+<td>${estoque}</td>
+<td class="${p.status}">${p.status}</td>
+</tr>`
+})
+}
+
+setInterval(atualizar, 2000)
+atualizar()
 </script>
-
-<h3>📜 Logs</h3>
-<pre style="background:black;color:#00ff00;padding:10px;height:300px;overflow:auto">
-{{logs}}
-</pre>
 
 </body>
 </html>
 """
 
-# ================= LOOP =================
-
-def loop():
-    global ultima_execucao, proxima_execucao, status
-
-    while True:
-        status = "Executando..."
-        ultima_execucao = datetime.now()
-
-        executar()
-
-        status = "Aguardando próxima execução"
-        proxima_execucao = datetime.now().timestamp() + INTERVALO
-
-        time.sleep(INTERVALO)
-
-threading.Thread(target=loop, daemon=True).start()
-
 # ================= ROTAS =================
 
 @app.route("/")
 def home():
-    stats = carregar_stats()
+    return render_template_string(HTML)
 
+@app.route("/data")
+def data():
     try:
-        logs = open("log.txt").read()[-8000:]
+        return json.load(open("dashboard.json"))
     except:
-        logs = "Sem logs"
-
-    labels = [h["hora"] for h in stats["historico"]]
-    valores = list(range(len(labels)))
-
-    return render_template_string(
-        HTML,
-        updates=stats["updates"],
-        novos=stats["novos"],
-        erros=stats["erros"],
-        logs=logs,
-        labels=labels,
-        valores=valores,
-        status=status,
-        ultima_execucao=ultima_execucao,
-        proxima_execucao=datetime.fromtimestamp(proxima_execucao).isoformat() if proxima_execucao else ""
-    )
-
-@app.route("/rodar", methods=["POST"])
-def rodar():
-    threading.Thread(target=executar).start()
-    return redirect("/")
+        return {"erro":"sem dados ainda"}
 
 app.run(host="0.0.0.0", port=3000)
