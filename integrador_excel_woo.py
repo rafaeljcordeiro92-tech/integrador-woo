@@ -24,7 +24,7 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 CACHE_FILE = "cache.json"
 TIMEOUT = 60
-MAX_WORKERS = 5
+MAX_WORKERS = 2
 INTERVALO = 300
 
 session = requests.Session()
@@ -92,28 +92,37 @@ def log(msg):
 # ================= LOGIN =================
 
 def login():
-    payload = {
-        "cpf": USUARIO,
-        "senha": SENHA,
-        "idempresa": EMPRESA
-    }
+    try:
+        payload = {
+            "cpf": USUARIO,
+            "senha": SENHA,
+            "idempresa": EMPRESA
+        }
 
-    r = session.post(LOGIN_URL, json=payload)
+        r = session.post(LOGIN_URL, json=payload, timeout=TIMEOUT)
 
-    if not r.json().get("status"):
-        log("❌ login falhou")
+        if not r.json().get("status"):
+            log("❌ login falhou")
+            return False
+
+        log("✅ login OK")
+        return True
+
+    except Exception as e:
+        log(f"❌ erro login: {e}")
         return False
-
-    log("✅ login OK")
-    return True
 
 # ================= BUSCA =================
 
 def buscar_skus():
     log("🔎 buscando SKUs...")
 
-    r = session.get(BUSCA_URL, timeout=TIMEOUT)
-    data = r.json()
+    try:
+        r = session.get(BUSCA_URL, timeout=TIMEOUT)
+        data = r.json()
+    except Exception as e:
+        log(f"❌ erro ao buscar SKUs: {e}")
+        return []
 
     skus = []
 
@@ -133,7 +142,8 @@ def buscar_skus():
             else:
                 skus.append(f"{idproduto}.0.0")
 
-        except:
+        except Exception as e:
+            log(f"⚠️ erro produto {idproduto}: {e}")
             continue
 
     log(f"📦 TOTAL SKUS: {len(skus)}")
@@ -147,7 +157,8 @@ def get_detalhe(sku):
         url = f"{BASE}/produto/detalhe/{EMPRESA}/{p[0]}/{p[1]}/{p[2]}"
         r = session.get(url, timeout=TIMEOUT)
         return r.json()["itens"][0]
-    except:
+    except Exception as e:
+        log(f"⚠️ erro detalhe {sku}: {e}")
         return None
 
 # ================= FILTRO =================
@@ -171,12 +182,13 @@ def save_cache(c):
 
 def produto_existe(sku):
     try:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku}, timeout=TIMEOUT)
         data = r.json()
         if data:
             return data[0]["id"]
         return None
-    except:
+    except Exception as e:
+        log(f"⚠️ erro consulta woo {sku}: {e}")
         return None
 
 def enviar(prod):
@@ -198,13 +210,13 @@ def enviar(prod):
 
     try:
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload, timeout=TIMEOUT)
             log(f"♻️ atualizado {prod['sku']}")
         else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            requests.post(URL_WOO, auth=(CK, CS), json=payload, timeout=TIMEOUT)
             log(f"🆕 criado {prod['sku']}")
-    except:
-        log(f"❌ erro envio {prod['sku']}")
+    except Exception as e:
+        log(f"❌ erro envio {prod['sku']}: {e}")
 
 # ================= EXECUÇÃO =================
 
