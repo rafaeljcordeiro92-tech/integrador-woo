@@ -23,9 +23,9 @@ CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 CACHE_FILE = "cache.json"
-TIMEOUT = 20
+TIMEOUT = 60
 MAX_WORKERS = 5
-INTERVALO = 300  # 5 min
+INTERVALO = 300
 
 session = requests.Session()
 session.headers.update({
@@ -110,6 +110,8 @@ def login():
 # ================= BUSCA =================
 
 def buscar_skus():
+    log("🔎 buscando SKUs...")
+
     r = session.get(BUSCA_URL, timeout=TIMEOUT)
     data = r.json()
 
@@ -204,7 +206,7 @@ def enviar(prod):
     except:
         log(f"❌ erro envio {prod['sku']}")
 
-# ================= PROCESSO =================
+# ================= EXECUÇÃO =================
 
 def executar():
 
@@ -271,7 +273,7 @@ def executar():
 
 app = Flask(__name__)
 
-def loop():
+def loop_principal():
     while True:
         try:
             executar()
@@ -285,7 +287,9 @@ def home():
     return "Integrador Woo rodando 🚀"
 
 if __name__ == "__main__":
-    t = threading.Thread(target=loop)
-    t.start()
+    thread = threading.Thread(target=loop_principal, daemon=True)
+    thread.start()
+
+    log("🔥 Loop iniciado")
 
     app.run(host="0.0.0.0", port=8080)
