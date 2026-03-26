@@ -23,7 +23,6 @@ URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-INTERVALO = 300
 TIMEOUT = 60
 MAX_WORKERS = 2
 
@@ -142,6 +141,7 @@ def executar():
 
     if not login():
         log("❌ login falhou")
+        STATUS["rodando"] = False
         return
 
     r = session.get(BUSCA_URL)
@@ -185,13 +185,6 @@ def executar():
     STATUS["rodando"] = False
     log("✅ finalizado")
 
-# ================= LOOP =================
-
-def loop():
-    while True:
-        executar()
-        time.sleep(INTERVALO)
-
 # ================= ROTAS =================
 
 @app.route("/")
@@ -214,6 +207,5 @@ def executar_manual():
 # ================= START =================
 
 if __name__ == "__main__":
-    threading.Thread(target=loop, daemon=True).start()
     log("🔥 iniciado")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
