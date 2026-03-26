@@ -1,6 +1,7 @@
 import requests
 import time
 import threading
+import os
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, jsonify, send_from_directory
@@ -98,12 +99,14 @@ def login():
 # ================= WOO =================
 
 def get_id(sku):
-    r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
-    data = r.json()
-    return data[0]["id"] if data else None
+    try:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
+        data = r.json()
+        return data[0]["id"] if data else None
+    except:
+        return None
 
 def enviar(prod):
-
     prod_id = get_id(prod["sku"])
 
     payload = {
@@ -119,14 +122,17 @@ def enviar(prod):
         ]
     }
 
-    if prod_id:
-        requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload, params={"force": True})
-        STATUS["atualizados"] += 1
-        log(f"♻️ {prod['sku']} -> {prod['stock']}")
-    else:
-        requests.post(URL_WOO, auth=(CK, CS), json=payload)
-        STATUS["criados"] += 1
-        log(f"🆕 {prod['sku']}")
+    try:
+        if prod_id:
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload, params={"force": True})
+            STATUS["atualizados"] += 1
+            log(f"♻️ {prod['sku']} -> {prod['stock']}")
+        else:
+            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            STATUS["criados"] += 1
+            log(f"🆕 {prod['sku']}")
+    except:
+        STATUS["erros"] += 1
 
 # ================= EXECUÇÃO =================
 
@@ -168,7 +174,7 @@ def executar():
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         ex.map(processar, lista)
 
-    # zerar
+    # zerar produtos
     r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100})
     for p in r.json():
         if p.get("sku") not in skus:
@@ -210,6 +216,4 @@ def executar_manual():
 if __name__ == "__main__":
     threading.Thread(target=loop, daemon=True).start()
     log("🔥 iniciado")
-    import os
-
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
