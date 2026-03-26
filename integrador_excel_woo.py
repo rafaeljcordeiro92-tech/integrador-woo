@@ -35,53 +35,6 @@ session.headers.update({
     "Origin": BASE
 })
 
-# ================= MAPAS =================
-
-MAPA_DEPARTAMENTOS = {
-    1010000000: "ELETRO",
-    1020000000: "MÓVEIS",
-    1050000000: "ESPORTE E LAZER",
-    1030000000: "INFORMÁTICA",
-    1040000000: "TELEF. CELULAR",
-    1060000000: "UTILIDADES",
-    1080000000: "CAMA, MESA E BANHO",
-    1090000000: "TAPETES",
-    1150000000: "LINHA AUTOMOTIVA",
-    1180000000: "LINHA ALTA",
-    1190000000: "COLCHÕES",
-    1170000000: "DECORAÇÃO"
-}
-
-MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-    1181020000: "COPA",
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-    1081010000: "CAMA",
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
-}
-
 # ================= LOG =================
 
 def log(msg):
@@ -96,7 +49,7 @@ def request_com_retry(url, tentativas=3):
         try:
             r = session.get(url, timeout=TIMEOUT)
             return r
-        except Exception:
+        except:
             log(f"⚠️ tentativa {tentativa+1} falhou: {url}")
             time.sleep(2)
 
@@ -126,59 +79,19 @@ def login():
         log(f"❌ erro login: {e}")
         return False
 
-# ================= BUSCA =================
-
-def buscar_skus():
-    log("🔎 buscando SKUs...")
-
-    r = request_com_retry(BUSCA_URL)
-    if not r:
-        return []
-
-    try:
-        data = r.json()
-    except:
-        return []
-
-    skus = []
-
-    for item in data.get("itens", []):
-        idproduto = item.get("idproduto")
-
-        url = f"{BASE}/produto/detalhe/{EMPRESA}/{idproduto}/0/0"
-        r2 = request_com_retry(url)
-
-        if not r2:
-            continue
-
-        try:
-            detalhe = r2.json()["itens"][0]
-            grades = detalhe.get("grades", {}).get("itens", [])
-
-            if grades:
-                for g in grades:
-                    skus.append(f"{idproduto}.{g['grade']}")
-            else:
-                skus.append(f"{idproduto}.0.0")
-
-        except:
-            continue
-
-    log(f"📦 TOTAL SKUS: {len(skus)}")
-    return skus
-
 # ================= DETALHE =================
 
 def get_detalhe(sku):
-    p = sku.split(".")
-    url = f"{BASE}/produto/detalhe/{EMPRESA}/{p[0]}/{p[1]}/{p[2]}"
-
-    r = request_com_retry(url)
-    if not r:
-        return None
-
     try:
+        p = sku.split(".")
+        url = f"{BASE}/produto/detalhe/{EMPRESA}/{p[0]}/{p[1]}/{p[2]}"
+
+        r = request_com_retry(url)
+        if not r:
+            return None
+
         return r.json()["itens"][0]
+
     except:
         return None
 
@@ -221,10 +134,6 @@ def enviar(prod):
         "sku": prod["sku"],
         "stock_quantity": prod["stock"],
         "manage_stock": True,
-        "categories": [
-            {"name": prod["departamento"]},
-            {"name": prod["categoria"]}
-        ],
         "images": prod["images"]
     }
 
@@ -248,9 +157,27 @@ def executar():
         return
 
     cache = load_cache()
-    skus = buscar_skus()
 
-    def processar(sku):
+    r = request_com_retry(BUSCA_URL)
+    if not r:
+        return
+
+    try:
+        lista = r.json().get("itens", [])
+    except:
+        log("❌ erro lista")
+        return
+
+    skus_fornecedor = set()
+
+    def processar(item):
+
+        idp = item.get("idproduto")
+        gx = item.get("idgradex", 0)
+        gy = item.get("idgradey", 0)
+
+        sku = f"{idp}.{gx}.{gy}"
+        skus_fornecedor.add(sku)
 
         data = get_detalhe(sku)
         if not data:
@@ -259,25 +186,13 @@ def executar():
         nome = data["produto"]
 
         if bloqueado(nome):
-            log(f"🚫 bloqueado: {nome}")
             return
-
-        idcat = int(data.get("idcategoria", 0))
-
-        categoria = MAPA_SUBDEPARTAMENTOS.get(idcat, "GERAL")
-
-        departamento = MAPA_DEPARTAMENTOS.get(
-            int(str(idcat)[:3] + "0000000"),
-            "GERAL"
-        )
 
         prod = {
             "name": nome,
             "price": str(round(float(data["precovenda"]), 2)),
             "sku": sku,
-            "stock": int(data["saldo"]),
-            "categoria": categoria,
-            "departamento": departamento,
+            "stock": int(item.get("saldo", 0)),
             "images": []
         }
 
@@ -296,16 +211,41 @@ def executar():
         cache[sku] = prod
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        ex.map(processar, skus)
+        ex.map(processar, lista)
+
+    # 🔥 ZERAR PRODUTOS
+
+    log("🧹 zerando produtos...")
+
+    try:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100})
+        produtos_woo = r.json()
+    except:
+        produtos_woo = []
+
+    for p in produtos_woo:
+        sku = p.get("sku")
+
+        if sku and sku not in skus_fornecedor:
+            try:
+                requests.put(
+                    f"{URL_WOO}/{p['id']}",
+                    auth=(CK, CS),
+                    json={"stock_quantity": 0, "manage_stock": True}
+                )
+                log(f"❌ zerado {sku}")
+            except:
+                pass
 
     save_cache(cache)
+
     log("✅ finalizado")
 
-# ================= LOOP + SERVER =================
+# ================= LOOP =================
 
 app = Flask(__name__)
 
-def loop_principal():
+def loop():
     while True:
         try:
             executar()
@@ -319,9 +259,6 @@ def home():
     return "Integrador Woo rodando 🚀"
 
 if __name__ == "__main__":
-    thread = threading.Thread(target=loop_principal, daemon=True)
-    thread.start()
-
+    threading.Thread(target=loop, daemon=True).start()
     log("🔥 Loop iniciado")
-
     app.run(host="0.0.0.0", port=8080)
