@@ -81,7 +81,7 @@ def log(msg):
     if len(LOGS) > 300:
         LOGS.pop(0)
 
-# ================= REQUEST (ANTI-BLOQUEIO) =================
+# ================= REQUEST =================
 
 def safe_request(method, url, **kwargs):
     for tentativa in range(4):
@@ -148,6 +148,9 @@ def enviar(prod):
     try:
         woo = get_produto_woo(prod["sku"])
 
+        # 🔥 ajuste seguro
+        descricao_final = prod["descricao"] if prod["descricao"] else prod["name"]
+
         if woo:
             changes = mudou(prod, woo)
 
@@ -157,7 +160,8 @@ def enviar(prod):
             payload = {
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
-                "description": prod["descricao"],
+                "description": descricao_final,
+                "short_description": descricao_final[:200],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
@@ -174,6 +178,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
+                "description": descricao_final,
+                "short_description": descricao_final[:200],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
@@ -317,10 +323,7 @@ def logs():
 if __name__ == "__main__":
     log("🔥 iniciado")
 
-    # executa ao iniciar
     threading.Thread(target=executar, daemon=True).start()
-
-    # mantém automático
     threading.Thread(target=scheduler, daemon=True).start()
 
     PORT = int(os.environ.get("PORT", 3000))
