@@ -13,8 +13,8 @@ app = Flask(__name__)
 BASE = "https://portal.juntossomosimbativeis.com.br"
 LOGIN_URL = BASE + "/login/parceiro"
 BUSCA_URL = BASE + "/produto/getPorCodigoNome/%20/2/272"
-EMPRESA = 272
 
+EMPRESA = 272
 USUARIO = "00905486986"
 SENHA = "Rafael2026@"
 
@@ -24,7 +24,6 @@ CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 MAX_WORKERS = 2
-
 session = requests.Session()
 
 # ================= MAPAS =================
@@ -94,6 +93,16 @@ def login():
     except:
         return False
 
+# ================= DETALHE =================
+
+def get_detalhe(id, x, y):
+    try:
+        url = f"{BASE}/produto/detalhe/{id}/{x}/{y}"
+        r = session.get(url)
+        return r.json().get("itens", [])[0]
+    except:
+        return None
+
 # ================= WOO =================
 
 def get_id(sku):
@@ -114,21 +123,28 @@ def enviar(prod):
         "stock_quantity": int(prod["stock"]),
         "manage_stock": True,
         "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
+
+        "description": prod.get("descricao", ""),
+        "short_description": prod.get("descricao", ""),
+
         "categories": [
             {"name": prod["departamento"]},
             {"name": prod["categoria"]}
-        ]
+        ],
+
+        "images": prod.get("imagens", []),
+        "attributes": prod.get("atributos", [])
     }
 
     try:
         if prod_id:
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
             STATUS["atualizados"] += 1
-            log(f"♻️ {prod['sku']} -> {prod['stock']}")
+            log(f"♻️ {prod['sku']} atualizado completo")
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
             STATUS["criados"] += 1
-            log(f"🆕 {prod['sku']}")
+            log(f"🆕 {prod['sku']} criado completo")
     except:
         STATUS["erros"] += 1
 
@@ -149,34 +165,66 @@ def executar():
     skus = set()
 
     def processar(item):
+
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
         skus.add(sku)
 
-        idcat = int(item.get("idcategoria", 0))
+        detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
+        if not detalhe:
+            return
+
+        idcat = int(detalhe.get("idcategoria", 0))
+
         categoria = MAPA_SUBDEPARTAMENTOS.get(idcat, "GERAL")
         departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
 
+        imagens = []
+        try:
+            for img in detalhe.get("fotos", {}).get("imagem", []):
+                for url in img.get("grande", []):
+                    imagens.append({"src": url})
+        except:
+            pass
+
+        descricao = detalhe.get("descricaodetalhada", "")
+        tecnica = detalhe.get("descricaotecnica", "")
+
+        descricao_final = f"{descricao}<br><br><b>Ficha Técnica:</b><br>{tecnica}"
+
+        atributos = []
+
+        if detalhe.get("cor"):
+            atributos.append({
+                "name": "Cor",
+                "visible": True,
+                "variation": False,
+                "options": [detalhe.get("cor")]
+            })
+
+        if detalhe.get("voltagem"):
+            atributos.append({
+                "name": "Voltagem",
+                "visible": True,
+                "variation": False,
+                "options": [detalhe.get("voltagem")]
+            })
+
         prod = {
-            "name": item.get("produto"),
+            "name": detalhe.get("produto"),
             "sku": sku,
-            "price": item.get("precovenda", 0),
-            "stock": int(item.get("saldo", 0)),
+            "price": detalhe.get("precovenda", 0),
+            "stock": int(detalhe.get("saldo", 0)),
             "categoria": categoria,
-            "departamento": departamento
+            "departamento": departamento,
+            "descricao": descricao_final,
+            "imagens": imagens,
+            "atributos": atributos
         }
 
         enviar(prod)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         ex.map(processar, lista)
-
-    # zerar produtos
-    r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100})
-    for p in r.json():
-        if p.get("sku") not in skus:
-            requests.put(f"{URL_WOO}/{p['id']}", auth=(CK, CS), json={"stock_quantity": 0})
-            STATUS["zerados"] += 1
-            log(f"❌ zerado {p.get('sku')}")
 
     STATUS["rodando"] = False
     log("✅ finalizado")
