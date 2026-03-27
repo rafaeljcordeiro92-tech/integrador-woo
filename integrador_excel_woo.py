@@ -26,6 +26,7 @@ MAX_WORKERS = 2
 session = requests.Session()
 
 # ================= MAPAS =================
+
 MAPA_DEPARTAMENTOS = {
     1010000000: "ELETRO",
     1020000000: "MÓVEIS",
@@ -72,6 +73,7 @@ MAPA_SUBDEPARTAMENTOS = {
 }
 
 # ================= STATUS =================
+
 STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "erros": 0}
 LOGS = []
 
@@ -82,6 +84,7 @@ def log(msg):
         LOGS.pop(0)
 
 # ================= LOGIN =================
+
 def login():
     try:
         r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
@@ -91,30 +94,19 @@ def login():
     except:
         return False
 
-# ================= DETALHE CORRETO =================
+# ================= DETALHE =================
+
 def get_detalhe(id, x, y):
     try:
         url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
-        log(f"🔎 detalhe: {url}")
-
         r = session.get(url, timeout=20)
-
-        if r.status_code != 200:
-            log(f"❌ status detalhe {id}: {r.status_code}")
-            return None
-
         data = r.json()
-
-        if not data.get("itens"):
-            return None
-
-        return data["itens"][0]
-
-    except Exception as e:
-        log(f"❌ erro detalhe {id}: {e}")
+        return data["itens"][0] if data.get("itens") else None
+    except:
         return None
 
 # ================= WOO =================
+
 def get_id(sku):
     try:
         r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
@@ -159,6 +151,7 @@ def enviar(prod):
         log(f"❌ erro {prod['sku']} {e}")
 
 # ================= EXECUTAR =================
+
 def executar():
     STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0})
 
@@ -176,25 +169,21 @@ def executar():
 
         detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
         if not detalhe:
-            log(f"❌ sem detalhe {sku}")
             return
 
-        idcat = int(detalhe.get("idcategoria", 0))
+        # 🔥 CORREÇÃO FINAL
+        id_departamento = detalhe.get("iddepartamento")
+        id_categoria = int(detalhe.get("idcategoria", 0))
 
-        categoria = MAPA_SUBDEPARTAMENTOS.get(idcat, "GERAL")
-        departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
+        departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
+        categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
 
         imagens = []
         for img in detalhe.get("fotos", {}).get("imagem", []):
             for url in img.get("grande", []):
                 imagens.append({"src": url})
 
-        log(f"🖼️ {sku} imagens: {len(imagens)}")
-
-        descricao = detalhe.get("descricaodetalhada", "")
-        tecnica = detalhe.get("descricaotecnica", "")
-
-        descricao_final = f"{descricao}<br><br><b>Ficha Técnica:</b><br>{tecnica}"
+        descricao_final = f"{detalhe.get('descricaodetalhada','')}<br><br><b>Ficha Técnica:</b><br>{detalhe.get('descricaotecnica','')}"
 
         atributos = []
 
@@ -225,6 +214,7 @@ def executar():
     log("✅ finalizado")
 
 # ================= ROTAS =================
+
 @app.route("/")
 def dashboard():
     return send_from_directory("dashboard", "index.html")
@@ -243,6 +233,7 @@ def executar_manual():
     return "ok"
 
 # ================= START =================
+
 if __name__ == "__main__":
     log("🔥 iniciado")
     PORT = int(os.environ.get("PORT", 3000))
