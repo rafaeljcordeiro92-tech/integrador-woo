@@ -125,8 +125,11 @@ def log(msg):
 def login():
     try:
         r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
-        return r.json().get("status")
-    except:
+        ok = r.json().get("status")
+        log("✅ login OK" if ok else "❌ login falhou")
+        return ok
+    except Exception as e:
+        log(f"❌ erro login: {e}")
         return False
 
 # ================= DETALHE =================
@@ -134,9 +137,24 @@ def login():
 def get_detalhe(id, x, y):
     try:
         url = f"{BASE}/produto/detalhe/{id}/{x}/{y}"
-        r = session.get(url)
-        return r.json().get("itens", [])[0]
-    except:
+        log(f"🔎 detalhe: {url}")
+
+        r = session.get(url, timeout=20)
+
+        if r.status_code != 200:
+            log(f"❌ status detalhe {id}: {r.status_code}")
+            return None
+
+        data = r.json()
+
+        if not data.get("itens"):
+            log(f"❌ sem itens detalhe {id}")
+            return None
+
+        return data["itens"][0]
+
+    except Exception as e:
+        log(f"❌ erro detalhe {id}: {e}")
         return None
 
 # ================= WOO =================
@@ -175,11 +193,7 @@ def enviar(prod):
 
     try:
         if prod_id:
-
-            # limpa imagens
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
-
-            # atualiza completo
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
             STATUS["atualizados"] += 1
@@ -187,6 +201,7 @@ def enviar(prod):
 
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
+
             STATUS["criados"] += 1
             log(f"🆕 {prod['sku']} FULL")
 
@@ -200,7 +215,6 @@ def executar():
     STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0})
 
     if not login():
-        log("❌ login falhou")
         STATUS["rodando"] = False
         return
 
@@ -214,8 +228,11 @@ def executar():
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
         detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
+
+        # 🔥 CORREÇÃO PRINCIPAL
         if not detalhe:
-            return
+            log(f"⚠️ fallback usado: {sku}")
+            detalhe = item
 
         idcat = int(detalhe.get("idcategoria", 0))
 
@@ -223,9 +240,12 @@ def executar():
         departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
 
         imagens = []
-        for img in detalhe.get("fotos", {}).get("imagem", []):
-            for url in img.get("grande", []):
-                imagens.append({"src": url})
+        try:
+            for img in detalhe.get("fotos", {}).get("imagem", []):
+                for url in img.get("grande", []):
+                    imagens.append({"src": url})
+        except:
+            pass
 
         log(f"🖼️ {sku} imagens: {len(imagens)}")
 
