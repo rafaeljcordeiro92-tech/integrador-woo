@@ -117,6 +117,7 @@ def get_produto_woo(sku):
     return data[0] if data else None
 
 # ================= COMPARAÇÃO =================
+# (mantido igual)
 
 def mudou(prod, woo):
     mudancas = []
@@ -136,6 +137,7 @@ def mudou(prod, woo):
     return mudancas
 
 # ================= ENVIAR =================
+# (mantido igual)
 
 def enviar(prod):
     try:
@@ -181,6 +183,7 @@ def enviar(prod):
         log(f"❌ {prod['sku']} {e}")
 
 # ================= EXECUTAR =================
+# (mantido igual)
 
 def executar():
     global STOP
@@ -231,6 +234,10 @@ def executar():
     log("✅ finalizado")
 
 # ================= ROTAS =================
+
+@app.route("/")
+def dashboard():
+    return send_from_directory("dashboard", "index.html")
 
 @app.route("/executar")
 def executar_manual():
