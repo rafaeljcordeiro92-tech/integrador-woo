@@ -111,6 +111,16 @@ def log(msg):
     if len(LOGS) > 300:
         LOGS.pop(0)
 
+# ================= WOO EXTRA =================
+
+def get_produto_woo(sku):
+    try:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
+        data = r.json()
+        return data[0] if data else None
+    except:
+        return None
+
 # ================= LOGIN =================
 
 def login():
@@ -133,18 +143,19 @@ def get_detalhe(id, x, y):
     except:
         return None
 
-# ================= WOO =================
-
-def get_id(sku):
-    try:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
-        data = r.json()
-        return data[0]["id"] if data else None
-    except:
-        return None
+# ================= ENVIAR =================
 
 def enviar(prod):
-    prod_id = get_id(prod["sku"])
+    prod_woo = get_produto_woo(prod["sku"])
+    prod_id = prod_woo["id"] if prod_woo else None
+
+    preco_antigo = prod_woo.get("regular_price") if prod_woo else "-"
+    estoque_antigo = prod_woo.get("stock_quantity") if prod_woo else "-"
+    imagens_antigas = len(prod_woo.get("images", [])) if prod_woo else 0
+
+    preco_novo = str(prod["price"])
+    estoque_novo = int(prod["stock"])
+    imagens_novas = len(prod["imagens"])
 
     cat_depto_id = get_or_create_category(prod["departamento"])
     cat_sub_id = get_or_create_category(prod["categoria"])
@@ -158,10 +169,10 @@ def enviar(prod):
     payload = {
         "name": prod["name"],
         "sku": prod["sku"],
-        "regular_price": str(prod["price"]),
-        "stock_quantity": int(prod["stock"]),
+        "regular_price": preco_novo,
+        "stock_quantity": estoque_novo,
         "manage_stock": True,
-        "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
+        "stock_status": "instock" if estoque_novo > 0 else "outofstock",
         "status": "publish",
         "description": prod["descricao"],
         "short_description": prod["descricao"],
@@ -174,12 +185,18 @@ def enviar(prod):
         if prod_id:
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+
             STATUS["atualizados"] += 1
-            log(f"♻️ {prod['sku']} FULL")
+
+            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
+
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
+
             STATUS["criados"] += 1
-            log(f"🆕 {prod['sku']} FULL")
+
+            log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
+
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
