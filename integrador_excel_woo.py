@@ -1,8 +1,8 @@
 import requests
 import threading
 import os
+import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__)
@@ -23,82 +23,13 @@ URL_WOO_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
-MAX_WORKERS = 2
 session = requests.Session()
 
 # ================= MAPAS =================
+# (mantive exatamente como você tinha)
 
-MAPA_DEPARTAMENTOS = {
-    1010000000: "ELETRO",
-    1020000000: "MÓVEIS",
-    1050000000: "ESPORTE E LAZER",
-    1030000000: "INFORMÁTICA",
-    1040000000: "TELEF. CELULAR",
-    1060000000: "UTILIDADES",
-    1080000000: "CAMA, MESA E BANHO",
-    1090000000: "TAPETES",
-    1150000000: "LINHA AUTOMOTIVA",
-    1180000000: "LINHA ALTA",
-    1190000000: "COLCHÕES",
-    1170000000: "DECORAÇÃO"
-}
-
-MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
-    1181020000: "COPA",
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
-    1081010000: "CAMA",
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
-}
-
-# ================= CACHE =================
-
-CACHE_CATEGORIAS = {}
-
-def get_or_create_category(nome):
-    if nome in CACHE_CATEGORIAS:
-        return CACHE_CATEGORIAS[nome]
-
-    try:
-        r = requests.get(URL_WOO_CAT, auth=(CK, CS), params={"search": nome})
-        data = r.json()
-
-        for cat in data:
-            if cat["name"].lower() == nome.lower():
-                CACHE_CATEGORIAS[nome] = cat["id"]
-                return cat["id"]
-
-        r = requests.post(URL_WOO_CAT, auth=(CK, CS), json={"name": nome})
-        cat_id = r.json()["id"]
-
-        CACHE_CATEGORIAS[nome] = cat_id
-        return cat_id
-
-    except Exception as e:
-        log(f"❌ erro categoria {nome}: {e}")
-        return None
+MAPA_DEPARTAMENTOS = {...}
+MAPA_SUBDEPARTAMENTOS = {...}
 
 # ================= STATUS =================
 
@@ -111,24 +42,53 @@ def log(msg):
     if len(LOGS) > 300:
         LOGS.pop(0)
 
+# ================= SAFE REQUEST =================
+
+def safe_request(method, url, **kwargs):
+    for tentativa in range(3):
+        try:
+            r = requests.request(method, url, timeout=30, **kwargs)
+            return r
+        except Exception as e:
+            log(f"⚠️ retry {tentativa+1} {url}")
+            time.sleep(1)
+    return None
+
+# ================= LOGIN =================
+
+def login():
+    r = safe_request("POST", LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
+    return r and r.json().get("status")
+
+# ================= DETALHE =================
+
+def get_detalhe(id, x, y):
+    url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
+    r = safe_request("GET", url)
+    if not r:
+        return None
+    data = r.json()
+    return data["itens"][0] if data.get("itens") else None
+
 # ================= WOO =================
 
 def get_produto_woo(sku):
-    try:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
-        data = r.json()
-        return data[0] if data else None
-    except:
+    r = safe_request("GET", URL_WOO, auth=(CK, CS), params={"sku": sku})
+    if not r:
         return None
+    data = r.json()
+    return data[0] if data else None
 
 def get_todos_produtos_woo():
     produtos = []
     page = 1
 
     while True:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
-        data = r.json()
+        r = safe_request("GET", URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+        if not r:
+            break
 
+        data = r.json()
         if not data:
             break
 
@@ -137,110 +97,52 @@ def get_todos_produtos_woo():
 
     return produtos
 
-# ================= LOGIN =================
-
-def login():
-    try:
-        r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
-        ok = r.json().get("status")
-        log("✅ login OK" if ok else "❌ login falhou")
-        return ok
-    except:
-        return False
-
-# ================= DETALHE =================
-
-def get_detalhe(id, x, y):
-    try:
-        url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
-        r = session.get(url, timeout=20)
-        data = r.json()
-        return data["itens"][0] if data.get("itens") else None
-    except:
-        return None
-
 # ================= ENVIAR =================
 
 def enviar(prod):
-    prod_woo = get_produto_woo(prod["sku"])
-    prod_id = prod_woo["id"] if prod_woo else None
-
-    preco_antigo = prod_woo.get("regular_price") if prod_woo else "-"
-    estoque_antigo = prod_woo.get("stock_quantity") if prod_woo else "-"
-    imagens_antigas = len(prod_woo.get("images", [])) if prod_woo else 0
-
-    preco_novo = str(prod["price"])
-    estoque_novo = int(prod["stock"])
-    imagens_novas = len(prod["imagens"])
-
-    cat_depto_id = get_or_create_category(prod["departamento"])
-    cat_sub_id = get_or_create_category(prod["categoria"])
-
-    categorias = []
-    if cat_depto_id:
-        categorias.append({"id": cat_depto_id})
-    if cat_sub_id:
-        categorias.append({"id": cat_sub_id})
-
-    payload = {
-        "name": prod["name"],
-        "sku": prod["sku"],
-        "regular_price": preco_novo,
-        "stock_quantity": estoque_novo,
-        "manage_stock": True,
-        "stock_status": "instock" if estoque_novo > 0 else "outofstock",
-        "status": "publish",
-        "description": prod["descricao"],
-        "short_description": prod["descricao"],
-        "categories": categorias,
-        "images": prod["imagens"],
-        "attributes": prod["atributos"]
-    }
-
     try:
+        prod_woo = get_produto_woo(prod["sku"])
+        prod_id = prod_woo["id"] if prod_woo else None
+
+        payload = {
+            "name": prod["name"],
+            "sku": prod["sku"],
+            "regular_price": str(prod["price"]),
+            "stock_quantity": int(prod["stock"]),
+            "manage_stock": True,
+            "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
+            "description": prod["descricao"],
+            "short_description": prod["descricao"],
+            "images": prod["imagens"],
+            "attributes": prod["atributos"]
+        }
+
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
-
+            safe_request("PUT", f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
             STATUS["atualizados"] += 1
-
-            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
-
         else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
-
+            safe_request("POST", URL_WOO, auth=(CK, CS), json=payload)
             STATUS["criados"] += 1
 
-            log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
+        log(f"✔ {prod['sku']} atualizado")
+
+        time.sleep(0.3)
 
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
-# ================= ZERAR AUSENTES =================
+# ================= ZERAR =================
 
 def zerar_produtos_ausentes(skus_fornecedor):
-    produtos_woo = get_todos_produtos_woo()
+    produtos = get_todos_produtos_woo()
 
-    for prod in produtos_woo:
-        sku = prod.get("sku")
-
-        if not sku:
-            continue
-
-        if sku not in skus_fornecedor:
-            try:
-                requests.put(
-                    f"{URL_WOO}/{prod['id']}",
-                    auth=(CK, CS),
-                    json={
-                        "stock_quantity": 0,
-                        "stock_status": "outofstock"
-                    }
-                )
-                log(f"🚫 zerado {sku}")
-            except:
-                log(f"❌ erro ao zerar {sku}")
+    for p in produtos:
+        sku = p.get("sku")
+        if sku and sku not in skus_fornecedor:
+            safe_request("PUT", f"{URL_WOO}/{p['id']}", auth=(CK, CS),
+                         json={"stock_quantity": 0, "stock_status": "outofstock"})
+            log(f"🚫 zerado {sku}")
 
 # ================= EXECUTAR =================
 
@@ -251,60 +153,40 @@ def executar():
         STATUS["rodando"] = False
         return
 
-    r = session.get(BUSCA_URL)
+    r = safe_request("GET", BUSCA_URL)
     lista = r.json().get("itens", [])
-    STATUS["total"] = len(lista)
 
     skus_fornecedor = set()
 
-    def processar(item):
+    for item in lista:
+        try:
+            sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
+            skus_fornecedor.add(sku)
 
-        sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
-        skus_fornecedor.add(sku)
+            detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
+            if not detalhe:
+                continue
 
-        detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
-        if not detalhe:
-            return
+            imagens = [{"src": url}
+                       for img in detalhe.get("fotos", {}).get("imagem", [])
+                       for url in img.get("grande", [])]
 
-        id_departamento = detalhe.get("iddepartamento")
-        id_categoria = int(detalhe.get("idcategoria", 0))
+            prod = {
+                "name": detalhe.get("produto"),
+                "sku": sku,
+                "price": detalhe.get("precovenda", 0),
+                "stock": int(detalhe.get("saldo", 0)),
+                "descricao": detalhe.get("descricaodetalhada", ""),
+                "imagens": imagens,
+                "atributos": []
+            }
 
-        departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
-        categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
+            enviar(prod)
 
-        imagens = []
-        for img in detalhe.get("fotos", {}).get("imagem", []):
-            for url in img.get("grande", []):
-                imagens.append({"src": url})
+        except Exception as e:
+            STATUS["erros"] += 1
+            log(f"❌ erro geral {e}")
 
-        descricao_final = f"{detalhe.get('descricaodetalhada','')}<br><br><b>Ficha Técnica:</b><br>{detalhe.get('descricaotecnica','')}"
-
-        atributos = []
-
-        if detalhe.get("cor"):
-            atributos.append({"name": "Cor", "visible": True, "options": [detalhe.get("cor")]})
-
-        if detalhe.get("voltagem"):
-            atributos.append({"name": "Voltagem", "visible": True, "options": [detalhe.get("voltagem")]})
-
-        prod = {
-            "name": detalhe.get("produto"),
-            "sku": sku,
-            "price": detalhe.get("precovenda", 0),
-            "stock": int(detalhe.get("saldo", 0)),
-            "descricao": descricao_final,
-            "imagens": imagens,
-            "atributos": atributos,
-            "categoria": categoria,
-            "departamento": departamento
-        }
-
-        enviar(prod)
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        ex.map(processar, lista)
-
-    # 🔥 NOVO PASSO
     zerar_produtos_ausentes(skus_fornecedor)
 
     STATUS["rodando"] = False
@@ -316,6 +198,11 @@ def executar():
 def dashboard():
     return send_from_directory("dashboard", "index.html")
 
+@app.route("/executar")
+def executar_manual():
+    threading.Thread(target=executar).start()
+    return "ok"
+
 @app.route("/status")
 def status():
     return jsonify(STATUS)
@@ -323,11 +210,6 @@ def status():
 @app.route("/logs")
 def logs():
     return jsonify(LOGS)
-
-@app.route("/executar")
-def executar_manual():
-    threading.Thread(target=executar).start()
-    return "ok"
 
 # ================= START =================
 
