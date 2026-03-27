@@ -2,7 +2,6 @@ import requests
 import threading
 import os
 import time
-import random
 from datetime import datetime
 from flask import Flask, jsonify, send_from_directory
 
@@ -84,19 +83,12 @@ def log(msg):
 # ================= REQUEST =================
 
 def safe_request(method, url, **kwargs):
-    for tentativa in range(4):
+    for tentativa in range(3):
         try:
-            r = requests.request(method, url, timeout=30, **kwargs)
-
-            if r.status_code >= 500:
-                raise Exception("server error")
-
-            return r
-
+            return requests.request(method, url, timeout=30, **kwargs)
         except:
             log(f"⚠️ retry {tentativa+1}")
-            time.sleep(random.uniform(1.5, 3.5) * (tentativa + 1))
-
+            time.sleep(1)
     return None
 
 # ================= LOGIN =================
@@ -145,7 +137,7 @@ def enviar(prod):
     try:
         woo = get_produto_woo(prod["sku"])
 
-        descricao_fornecedor = (prod["descricao"] or "").strip()
+        descricao = (prod["descricao"] or "").strip()
 
         if woo:
             changes = mudou(prod, woo)
@@ -157,11 +149,9 @@ def enviar(prod):
                 "attributes": prod["atributos"]
             }
 
-            # 🔥 só mexe na descrição se tiver conteúdo válido E for diferente
-            if descricao_fornecedor:
-                if (woo.get("description") or "").strip() != descricao_fornecedor:
-                    payload["description"] = descricao_fornecedor
-                    payload["short_description"] = descricao_fornecedor[:200]
+            if descricao:
+                if (woo.get("description") or "").strip() != descricao:
+                    payload["description"] = descricao
                     changes.append("📄 descrição")
 
             if not changes:
@@ -173,16 +163,13 @@ def enviar(prod):
             log(f"{prod['sku']} | {' | '.join(changes)}")
 
         else:
-            descricao_final = descricao_fornecedor or prod["name"]
-
             payload = {
                 "name": prod["name"],
                 "sku": prod["sku"],
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
-                "description": descricao_final,
-                "short_description": descricao_final[:200],
+                "description": descricao if descricao else prod["name"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
@@ -192,7 +179,7 @@ def enviar(prod):
             STATUS["criados"] += 1
             log(f"🆕 {prod['sku']} criado")
 
-        time.sleep(random.uniform(0.5, 1.2))
+        time.sleep(0.4)
 
     except Exception as e:
         STATUS["erros"] += 1
@@ -278,22 +265,6 @@ def executar():
     STATUS["rodando"] = False
     log("✅ finalizado")
 
-# ================= SCHEDULER =================
-
-def scheduler():
-    while True:
-        hora = datetime.now().hour
-
-        if 8 <= hora <= 18:
-            log("⏰ execução automática")
-            executar()
-
-            pausa = random.uniform(3600, 7200)
-            log(f"🕒 próxima em {int(pausa/60)} min")
-            time.sleep(pausa)
-        else:
-            time.sleep(1800)
-
 # ================= ROTAS =================
 
 @app.route("/")
@@ -313,9 +284,7 @@ def parar():
 
 @app.route("/status")
 def status():
-    data = STATUS.copy()
-    data["modo"] = "auto"
-    return jsonify(data)
+    return jsonify(STATUS)
 
 @app.route("/logs")
 def logs():
@@ -325,9 +294,5 @@ def logs():
 
 if __name__ == "__main__":
     log("🔥 iniciado")
-
-    threading.Thread(target=executar, daemon=True).start()
-    threading.Thread(target=scheduler, daemon=True).start()
-
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
