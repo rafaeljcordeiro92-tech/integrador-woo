@@ -18,6 +18,7 @@ USUARIO = "00905486986"
 SENHA = "Rafael2026@"
 
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
+URL_WOO_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
@@ -72,6 +73,33 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
+# ================= CACHE CATEGORIAS =================
+
+CACHE_CATEGORIAS = {}
+
+def get_or_create_category(nome):
+    if nome in CACHE_CATEGORIAS:
+        return CACHE_CATEGORIAS[nome]
+
+    try:
+        r = requests.get(URL_WOO_CAT, auth=(CK, CS), params={"search": nome})
+        data = r.json()
+
+        for cat in data:
+            if cat["name"].lower() == nome.lower():
+                CACHE_CATEGORIAS[nome] = cat["id"]
+                return cat["id"]
+
+        r = requests.post(URL_WOO_CAT, auth=(CK, CS), json={"name": nome})
+        cat_id = r.json()["id"]
+
+        CACHE_CATEGORIAS[nome] = cat_id
+        return cat_id
+
+    except Exception as e:
+        log(f"❌ erro categoria {nome}: {e}")
+        return None
+
 # ================= STATUS =================
 
 STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "erros": 0}
@@ -118,6 +146,15 @@ def get_id(sku):
 def enviar(prod):
     prod_id = get_id(prod["sku"])
 
+    cat_depto_id = get_or_create_category(prod["departamento"])
+    cat_sub_id = get_or_create_category(prod["categoria"])
+
+    categorias = []
+    if cat_depto_id:
+        categorias.append({"id": cat_depto_id})
+    if cat_sub_id:
+        categorias.append({"id": cat_sub_id})
+
     payload = {
         "name": prod["name"],
         "sku": prod["sku"],
@@ -128,10 +165,7 @@ def enviar(prod):
         "status": "publish",
         "description": prod["descricao"],
         "short_description": prod["descricao"],
-        "categories": [
-            {"name": prod["departamento"]},
-            {"name": prod["categoria"]}
-        ],
+        "categories": categorias,
         "images": prod["imagens"],
         "attributes": prod["atributos"]
     }
@@ -171,7 +205,6 @@ def executar():
         if not detalhe:
             return
 
-        # 🔥 CORREÇÃO FINAL
         id_departamento = detalhe.get("iddepartamento")
         id_categoria = int(detalhe.get("idcategoria", 0))
 
