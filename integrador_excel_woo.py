@@ -150,7 +150,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "description": prod["descricao"],
-                "images": prod["imagens"]
+                "images": prod["imagens"],
+                "attributes": prod["atributos"]
             }
 
             safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
@@ -165,7 +166,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
-                "images": prod["imagens"]
+                "images": prod["imagens"],
+                "attributes": prod["atributos"]
             }
 
             safe_request("POST", URL_WOO, auth=(CK, CS), json=payload)
@@ -220,13 +222,32 @@ def executar():
                        for img in detalhe.get("fotos", {}).get("imagem", [])
                        for url in img.get("grande", [])]
 
+            atributos = []
+
+            if detalhe.get("cor"):
+                atributos.append({
+                    "name": "Cor",
+                    "visible": True,
+                    "variation": False,
+                    "options": [detalhe.get("cor")]
+                })
+
+            if detalhe.get("voltagem"):
+                atributos.append({
+                    "name": "Voltagem",
+                    "visible": True,
+                    "variation": False,
+                    "options": [detalhe.get("voltagem")]
+                })
+
             prod = {
                 "name": detalhe.get("produto"),
                 "sku": sku,
                 "price": detalhe.get("precovenda", 0),
                 "stock": int(detalhe.get("saldo", 0)),
                 "descricao": detalhe.get("descricaodetalhada", ""),
-                "imagens": imagens
+                "imagens": imagens,
+                "atributos": atributos
             }
 
             enviar(prod)
