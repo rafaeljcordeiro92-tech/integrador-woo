@@ -137,9 +137,6 @@ def mudou(prod, woo):
     if len(woo.get("images", [])) != len(prod["imagens"]):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
 
-    if (woo.get("description") or "") != prod["descricao"]:
-        mudancas.append("📄 descrição")
-
     return mudancas
 
 # ================= ENVIAR =================
@@ -148,23 +145,27 @@ def enviar(prod):
     try:
         woo = get_produto_woo(prod["sku"])
 
-        # 🔥 ajuste seguro
-        descricao_final = prod["descricao"] if prod["descricao"] else prod["name"]
+        descricao_fornecedor = (prod["descricao"] or "").strip()
 
         if woo:
             changes = mudou(prod, woo)
 
-            if not changes:
-                return
-
             payload = {
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
-                "description": descricao_final,
-                "short_description": descricao_final[:200],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
+
+            # 🔥 só mexe na descrição se tiver conteúdo válido E for diferente
+            if descricao_fornecedor:
+                if (woo.get("description") or "").strip() != descricao_fornecedor:
+                    payload["description"] = descricao_fornecedor
+                    payload["short_description"] = descricao_fornecedor[:200]
+                    changes.append("📄 descrição")
+
+            if not changes:
+                return
 
             safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
 
@@ -172,6 +173,8 @@ def enviar(prod):
             log(f"{prod['sku']} | {' | '.join(changes)}")
 
         else:
+            descricao_final = descricao_fornecedor or prod["name"]
+
             payload = {
                 "name": prod["name"],
                 "sku": prod["sku"],
