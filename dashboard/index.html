@@ -2,11 +2,11 @@
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
-<title>Dashboard Integrador Woo</title>
+<title>Integrador Woo - Elite</title>
 
 <style>
 body {
-    background: #0f172a;
+    background: linear-gradient(135deg, #020617, #0f172a);
     color: #e2e8f0;
     font-family: Arial;
     padding: 20px;
@@ -17,24 +17,57 @@ h1 {
 }
 
 button {
-    background: #22c55e;
     border: none;
     padding: 10px 15px;
     margin: 5px;
     cursor: pointer;
     color: #fff;
     border-radius: 6px;
+    font-weight: bold;
 }
 
-button:hover {
-    background: #16a34a;
+.btn-run { background: #22c55e; }
+.btn-stop { background: #ef4444; }
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
 }
 
 .card {
     background: #1e293b;
     padding: 15px;
-    margin: 10px 0;
-    border-radius: 8px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px #00000040;
+    transition: 0.3s;
+}
+
+.card:hover {
+    transform: scale(1.02);
+}
+
+.big {
+    font-size: 22px;
+    font-weight: bold;
+}
+
+.green { color: #22c55e; }
+.yellow { color: #facc15; }
+.red { color: #ef4444; }
+
+.progress {
+    background: #020617;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+.progress-bar {
+    height: 20px;
+    background: #22c55e;
+    width: 0%;
+    transition: 0.5s;
 }
 
 pre {
@@ -42,32 +75,31 @@ pre {
     padding: 10px;
     height: 300px;
     overflow: auto;
-    border-radius: 6px;
+    border-radius: 8px;
 }
-
-.grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-}
-
-.status-ok { color: #22c55e; }
-.status-run { color: #facc15; }
 </style>
 
 </head>
 <body>
 
-<h1>🚀 Integrador Woo - Dashboard</h1>
+<h1>🚀 Integrador Woo - Elite Dashboard</h1>
 
-<button onclick="executar()">🔄 Executar Agora</button>
+<button class="btn-run" onclick="executar()">🔄 Executar</button>
+<button class="btn-stop" onclick="parar()">🛑 Parar</button>
 
 <div class="grid">
 
 <div class="card">
 <h3>Status</h3>
-<p id="rodando"></p>
-<p id="ultima"></p>
+<div id="status" class="big"></div>
+</div>
+
+<div class="card">
+<h3>Progresso</h3>
+<div id="percent" class="big">0%</div>
+<div class="progress">
+<div class="progress-bar" id="barra"></div>
+</div>
 </div>
 
 <div class="card">
@@ -75,14 +107,18 @@ pre {
 <p>Total: <span id="total"></span></p>
 <p>Atualizados: <span id="atualizados"></span></p>
 <p>Criados: <span id="criados"></span></p>
-<p>Zerados: <span id="zerados"></span></p>
 </div>
 
 <div class="card">
 <h3>Erros</h3>
-<p id="erros"></p>
+<div id="erros" class="big red">0</div>
 </div>
 
+</div>
+
+<div class="card">
+<h3>⏱ Tempo execução</h3>
+<div id="tempo" class="big">0s</div>
 </div>
 
 <div class="card">
@@ -92,34 +128,68 @@ pre {
 
 <script>
 
+let inicio = null
+
 async function atualizar() {
 
     try {
 
         let status = await fetch('/status').then(r => r.json())
 
-        document.getElementById('rodando').innerHTML =
-            status.rodando
-            ? '<span class="status-run">⏳ Rodando...</span>'
-            : '<span class="status-ok">✅ Parado</span>'
+        // STATUS
+        let statusTxt = document.getElementById('status')
 
+        if (status.rodando) {
+            statusTxt.innerHTML = "⏳ Rodando"
+            statusTxt.className = "big yellow"
+
+            if (!inicio) inicio = Date.now()
+        } else {
+            statusTxt.innerHTML = "✅ Parado"
+            statusTxt.className = "big green"
+            inicio = null
+        }
+
+        // PRODUTOS
         document.getElementById('total').innerText = status.total || 0
         document.getElementById('atualizados').innerText = status.atualizados || 0
         document.getElementById('criados').innerText = status.criados || 0
-        document.getElementById('zerados').innerText = status.zerados || 0
         document.getElementById('erros').innerText = status.erros || 0
 
+        // PROGRESSO
+        let total = status.total || 0
+        let feitos = (status.atualizados || 0) + (status.criados || 0)
+
+        let percent = total > 0 ? Math.floor((feitos / total) * 100) : 0
+
+        document.getElementById('percent').innerText = percent + "%"
+        document.getElementById('barra').style.width = percent + "%"
+
+        // TEMPO
+        if (inicio) {
+            let tempo = Math.floor((Date.now() - inicio) / 1000)
+            document.getElementById('tempo').innerText = tempo + "s"
+        }
+
+        // LOGS
         let logs = await fetch('/logs').then(r => r.json())
 
-        document.getElementById('logs').innerText = logs.join("\n")
+        let el = document.getElementById('logs')
+        el.innerText = logs.join("\n")
+        el.scrollTop = el.scrollHeight
 
     } catch(e) {
-        console.log("erro ao atualizar", e)
+        console.log("erro", e)
     }
 }
 
 function executar() {
+    inicio = Date.now()
     fetch('/executar')
+}
+
+function parar() {
+    fetch('/parar')
 }
 
 setInterval(atualizar, 2000)

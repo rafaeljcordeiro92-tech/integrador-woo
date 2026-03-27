@@ -23,7 +23,6 @@ CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 # ================= MAPAS =================
-
 MAPA_DEPARTAMENTOS = {
     1010000000: "ELETRO",
     1020000000: "MÓVEIS",
@@ -71,7 +70,7 @@ MAPA_SUBDEPARTAMENTOS = {
 
 # ================= STATUS =================
 
-STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "erros": 0}
+STATUS = {"rodando": False, "total": 0, "processados": 0, "atualizados": 0, "criados": 0, "erros": 0}
 LOGS = []
 STOP = False
 
@@ -117,7 +116,6 @@ def get_produto_woo(sku):
     return data[0] if data else None
 
 # ================= COMPARAÇÃO =================
-# (mantido igual)
 
 def mudou(prod, woo):
     mudancas = []
@@ -137,7 +135,6 @@ def mudou(prod, woo):
     return mudancas
 
 # ================= ENVIAR =================
-# (mantido igual)
 
 def enviar(prod):
     try:
@@ -183,13 +180,19 @@ def enviar(prod):
         log(f"❌ {prod['sku']} {e}")
 
 # ================= EXECUTAR =================
-# (mantido igual)
 
 def executar():
     global STOP
     STOP = False
 
-    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0})
+    STATUS.update({
+        "rodando": True,
+        "total": 0,
+        "processados": 0,
+        "atualizados": 0,
+        "criados": 0,
+        "erros": 0
+    })
 
     if not login():
         STATUS["rodando"] = False
@@ -197,6 +200,8 @@ def executar():
 
     r = safe_request("GET", BUSCA_URL)
     lista = r.json().get("itens", [])
+
+    STATUS["total"] = len(lista)
 
     for item in lista:
 
@@ -225,6 +230,8 @@ def executar():
             }
 
             enviar(prod)
+
+            STATUS["processados"] += 1
 
         except Exception as e:
             STATUS["erros"] += 1
