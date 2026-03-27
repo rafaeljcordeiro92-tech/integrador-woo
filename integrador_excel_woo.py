@@ -26,7 +26,6 @@ MAX_WORKERS = 2
 session = requests.Session()
 
 # ================= MAPAS =================
-
 MAPA_DEPARTAMENTOS = {
     1010000000: "ELETRO",
     1020000000: "MÓVEIS",
@@ -43,74 +42,36 @@ MAPA_DEPARTAMENTOS = {
 }
 
 MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS",
-    1013050000: "AQUECIMENTO",
-    1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR",
-    1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES",
-    1012020000: "FOGÕES",
-    1012050000: "FORNOS",
-    1012040000: "FREEZER",
-    1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA",
-    1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES",
-    1012060000: "SECADORAS",
-    1011010000: "TELEVISORES",
-    1013040000: "VENTILAÇÃO",
-    1011020000: "VÍDEOS",
-    1051020000: "ADULTO",
-    1055010000: "CAMPING",
-    1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ",
-    1052010000: "MINI VEÍCULOS",
-    1033010000: "IMPRESSORAS",
-    1035010000: "TABLETS",
+    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
+    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
+    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
+    1012040000: "FREEZER", 1012080000: "LAVADORAS",
+    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
+    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
+    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
+    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
+    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
+    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
     1181020000: "COPA",
-    1152010000: "IMPORTADO",
-    1151010000: "LINHA AUTOMOTIVA",
-    1152020000: "NACIONAL",
-    1024030000: "APARADOR",
-    1023020000: "ARMÁRIOS",
-    1023010000: "BALCÃO",
-    1024020000: "BALCÕES",
-    1028010000: "BANHEIRO",
-    1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA",
-    1024080000: "CADEIRAS",
-    1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA",
-    1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR",
-    1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS",
-    1023040000: "CRISTALEIRAS",
-    1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO",
-    1022020000: "ESTANTES",
-    1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS",
-    1022030000: "HOME",
-    1023080000: "KITS",
-    1026010000: "LAVANDERIA",
-    1023110000: "MESA",
-    1043010000: "ACESSÓRIOS",
-    1041010000: "CELULARES",
-    1061010000: "CUTELARIA",
-    1063010000: "FORNO E FOGÃO",
-    1067010000: "UTILIDADES",
+    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
+    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
+    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
+    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
+    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
+    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
+    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
+    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
+    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
+    1026010000: "LAVANDERIA", 1023110000: "MESA",
+    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
+    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
     1081010000: "CAMA",
-    1193030000: "CAMA BOX",
-    1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL",
-    1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO",
-    1193010000: "CONJUNTO BOX SOLTEIRO"
+    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
+    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
+    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
 # ================= STATUS =================
-
 STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "erros": 0}
 LOGS = []
 
@@ -121,22 +82,19 @@ def log(msg):
         LOGS.pop(0)
 
 # ================= LOGIN =================
-
 def login():
     try:
         r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
         ok = r.json().get("status")
         log("✅ login OK" if ok else "❌ login falhou")
         return ok
-    except Exception as e:
-        log(f"❌ erro login: {e}")
+    except:
         return False
 
-# ================= DETALHE =================
-
+# ================= DETALHE CORRETO =================
 def get_detalhe(id, x, y):
     try:
-        url = f"{BASE}/produto/detalhe/{id}/{x}/{y}"
+        url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
         log(f"🔎 detalhe: {url}")
 
         r = session.get(url, timeout=20)
@@ -148,7 +106,6 @@ def get_detalhe(id, x, y):
         data = r.json()
 
         if not data.get("itens"):
-            log(f"❌ sem itens detalhe {id}")
             return None
 
         return data["itens"][0]
@@ -158,7 +115,6 @@ def get_detalhe(id, x, y):
         return None
 
 # ================= WOO =================
-
 def get_id(sku):
     try:
         r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
@@ -178,15 +134,12 @@ def enviar(prod):
         "manage_stock": True,
         "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
         "status": "publish",
-
         "description": prod["descricao"],
         "short_description": prod["descricao"],
-
         "categories": [
             {"name": prod["departamento"]},
             {"name": prod["categoria"]}
         ],
-
         "images": prod["imagens"],
         "attributes": prod["atributos"]
     }
@@ -195,22 +148,17 @@ def enviar(prod):
         if prod_id:
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
-
             STATUS["atualizados"] += 1
             log(f"♻️ {prod['sku']} FULL")
-
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
-
             STATUS["criados"] += 1
             log(f"🆕 {prod['sku']} FULL")
-
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
 # ================= EXECUTAR =================
-
 def executar():
     STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0})
 
@@ -220,7 +168,6 @@ def executar():
 
     r = session.get(BUSCA_URL)
     lista = r.json().get("itens", [])
-
     STATUS["total"] = len(lista)
 
     def processar(item):
@@ -228,11 +175,9 @@ def executar():
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
         detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
-
-        # 🔥 CORREÇÃO PRINCIPAL
         if not detalhe:
-            log(f"⚠️ fallback usado: {sku}")
-            detalhe = item
+            log(f"❌ sem detalhe {sku}")
+            return
 
         idcat = int(detalhe.get("idcategoria", 0))
 
@@ -240,19 +185,16 @@ def executar():
         departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
 
         imagens = []
-        try:
-            for img in detalhe.get("fotos", {}).get("imagem", []):
-                for url in img.get("grande", []):
-                    imagens.append({"src": url})
-        except:
-            pass
+        for img in detalhe.get("fotos", {}).get("imagem", []):
+            for url in img.get("grande", []):
+                imagens.append({"src": url})
 
         log(f"🖼️ {sku} imagens: {len(imagens)}")
 
         descricao = detalhe.get("descricaodetalhada", "")
         tecnica = detalhe.get("descricaotecnica", "")
 
-        descricao_final = f"{descricao}<br><br><b>Ficha Técnica:</b><br>{tecnica}<br><!-- update -->"
+        descricao_final = f"{descricao}<br><br><b>Ficha Técnica:</b><br>{tecnica}"
 
         atributos = []
 
@@ -283,7 +225,6 @@ def executar():
     log("✅ finalizado")
 
 # ================= ROTAS =================
-
 @app.route("/")
 def dashboard():
     return send_from_directory("dashboard", "index.html")
@@ -302,7 +243,6 @@ def executar_manual():
     return "ok"
 
 # ================= START =================
-
 if __name__ == "__main__":
     log("🔥 iniciado")
     PORT = int(os.environ.get("PORT", 3000))
