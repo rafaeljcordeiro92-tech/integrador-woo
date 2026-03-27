@@ -1,5 +1,4 @@
 import requests
-import time
 import threading
 import os
 from datetime import datetime
@@ -44,38 +43,75 @@ MAPA_DEPARTAMENTOS = {
 }
 
 MAPA_SUBDEPARTAMENTOS = {
-    1012090000: "ADEGAS", 1013050000: "AQUECIMENTO", 1011030000: "ÁUDIO",
-    1012070000: "CONDICIONADOR DE AR", 1013030000: "CUIDADOS PESSOAIS",
-    1012010000: "EXAUSTORES", 1012020000: "FOGÕES", 1012050000: "FORNOS",
-    1012040000: "FREEZER", 1012080000: "LAVADORAS",
-    1013010000: "PORTÁTEIS DE COZINHA", 1013020000: "PORTÁTEIS DE SERVIÇO",
-    1012030000: "REFRIGERADORES", 1012060000: "SECADORAS",
-    1011010000: "TELEVISORES", 1013040000: "VENTILAÇÃO", 1011020000: "VÍDEOS",
-    1051020000: "ADULTO", 1055010000: "CAMPING", 1051010000: "INFANTIL",
-    1056010000: "LINHA BEBÊ", 1052010000: "MINI VEÍCULOS",
-    1033010000: "IMPRESSORAS", 1035010000: "TABLETS",
+    1012090000: "ADEGAS",
+    1013050000: "AQUECIMENTO",
+    1011030000: "ÁUDIO",
+    1012070000: "CONDICIONADOR DE AR",
+    1013030000: "CUIDADOS PESSOAIS",
+    1012010000: "EXAUSTORES",
+    1012020000: "FOGÕES",
+    1012050000: "FORNOS",
+    1012040000: "FREEZER",
+    1012080000: "LAVADORAS",
+    1013010000: "PORTÁTEIS DE COZINHA",
+    1013020000: "PORTÁTEIS DE SERVIÇO",
+    1012030000: "REFRIGERADORES",
+    1012060000: "SECADORAS",
+    1011010000: "TELEVISORES",
+    1013040000: "VENTILAÇÃO",
+    1011020000: "VÍDEOS",
+    1051020000: "ADULTO",
+    1055010000: "CAMPING",
+    1051010000: "INFANTIL",
+    1056010000: "LINHA BEBÊ",
+    1052010000: "MINI VEÍCULOS",
+    1033010000: "IMPRESSORAS",
+    1035010000: "TABLETS",
     1181020000: "COPA",
-    1152010000: "IMPORTADO", 1151010000: "LINHA AUTOMOTIVA", 1152020000: "NACIONAL",
-    1024030000: "APARADOR", 1023020000: "ARMÁRIOS", 1023010000: "BALCÃO",
-    1024020000: "BALCÕES", 1028010000: "BANHEIRO", 1021020000: "CABECEIRAS",
-    1023120000: "CADEIRA", 1024080000: "CADEIRAS", 1021010000: "CAMA",
-    1021040000: "COLCHÕES MOLA", 1021080000: "CÔMODAS",
-    1024010000: "CONJUNTO DE JANTAR", 1023070000: "COZINHAS COMPACTAS",
-    1021060000: "CRIADOS", 1023040000: "CRISTALEIRAS", 1023090000: "CUBA",
-    1025010000: "ESCRITÓRIO", 1022020000: "ESTANTES", 1022010000: "ESTOFADOS",
-    1021070000: "GUARDA-ROUPAS", 1022030000: "HOME", 1023080000: "KITS",
-    1026010000: "LAVANDERIA", 1023110000: "MESA",
-    1043010000: "ACESSÓRIOS", 1041010000: "CELULARES",
-    1061010000: "CUTELARIA", 1063010000: "FORNO E FOGÃO", 1067010000: "UTILIDADES",
+    1152010000: "IMPORTADO",
+    1151010000: "LINHA AUTOMOTIVA",
+    1152020000: "NACIONAL",
+    1024030000: "APARADOR",
+    1023020000: "ARMÁRIOS",
+    1023010000: "BALCÃO",
+    1024020000: "BALCÕES",
+    1028010000: "BANHEIRO",
+    1021020000: "CABECEIRAS",
+    1023120000: "CADEIRA",
+    1024080000: "CADEIRAS",
+    1021010000: "CAMA",
+    1021040000: "COLCHÕES MOLA",
+    1021080000: "CÔMODAS",
+    1024010000: "CONJUNTO DE JANTAR",
+    1023070000: "COZINHAS COMPACTAS",
+    1021060000: "CRIADOS",
+    1023040000: "CRISTALEIRAS",
+    1023090000: "CUBA",
+    1025010000: "ESCRITÓRIO",
+    1022020000: "ESTANTES",
+    1022010000: "ESTOFADOS",
+    1021070000: "GUARDA-ROUPAS",
+    1022030000: "HOME",
+    1023080000: "KITS",
+    1026010000: "LAVANDERIA",
+    1023110000: "MESA",
+    1043010000: "ACESSÓRIOS",
+    1041010000: "CELULARES",
+    1061010000: "CUTELARIA",
+    1063010000: "FORNO E FOGÃO",
+    1067010000: "UTILIDADES",
     1081010000: "CAMA",
-    1193030000: "CAMA BOX", 1191010000: "COLCHÕES DE BERÇO",
-    1191030000: "COLCHÕES DE CASAL", 1192020000: "COLCHÕES DE MOLA CASAL",
-    1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
+    1193030000: "CAMA BOX",
+    1191010000: "COLCHÕES DE BERÇO",
+    1191030000: "COLCHÕES DE CASAL",
+    1192020000: "COLCHÕES DE MOLA CASAL",
+    1191020000: "COLCHÕES DE SOLTEIRO",
+    1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
 # ================= STATUS =================
 
-STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "zerados": 0, "erros": 0}
+STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "erros": 0}
 LOGS = []
 
 def log(msg):
@@ -123,35 +159,45 @@ def enviar(prod):
         "stock_quantity": int(prod["stock"]),
         "manage_stock": True,
         "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
+        "status": "publish",
 
-        "description": prod.get("descricao", ""),
-        "short_description": prod.get("descricao", ""),
+        "description": prod["descricao"],
+        "short_description": prod["descricao"],
 
         "categories": [
             {"name": prod["departamento"]},
             {"name": prod["categoria"]}
         ],
 
-        "images": prod.get("imagens", []),
-        "attributes": prod.get("atributos", [])
+        "images": prod["imagens"],
+        "attributes": prod["atributos"]
     }
 
     try:
         if prod_id:
+
+            # limpa imagens
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
+
+            # atualiza completo
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+
             STATUS["atualizados"] += 1
-            log(f"♻️ {prod['sku']} atualizado completo")
+            log(f"♻️ {prod['sku']} FULL")
+
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
             STATUS["criados"] += 1
-            log(f"🆕 {prod['sku']} criado completo")
-    except:
+            log(f"🆕 {prod['sku']} FULL")
+
+    except Exception as e:
         STATUS["erros"] += 1
+        log(f"❌ erro {prod['sku']} {e}")
 
 # ================= EXECUTAR =================
 
 def executar():
-    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "zerados": 0, "erros": 0})
+    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0})
 
     if not login():
         log("❌ login falhou")
@@ -162,12 +208,10 @@ def executar():
     lista = r.json().get("itens", [])
 
     STATUS["total"] = len(lista)
-    skus = set()
 
     def processar(item):
 
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
-        skus.add(sku)
 
         detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
         if not detalhe:
@@ -179,46 +223,35 @@ def executar():
         departamento = MAPA_DEPARTAMENTOS.get(int(str(idcat)[:3] + "0000000"), "GERAL")
 
         imagens = []
-        try:
-            for img in detalhe.get("fotos", {}).get("imagem", []):
-                for url in img.get("grande", []):
-                    imagens.append({"src": url})
-        except:
-            pass
+        for img in detalhe.get("fotos", {}).get("imagem", []):
+            for url in img.get("grande", []):
+                imagens.append({"src": url})
+
+        log(f"🖼️ {sku} imagens: {len(imagens)}")
 
         descricao = detalhe.get("descricaodetalhada", "")
         tecnica = detalhe.get("descricaotecnica", "")
 
-        descricao_final = f"{descricao}<br><br><b>Ficha Técnica:</b><br>{tecnica}"
+        descricao_final = f"{descricao}<br><br><b>Ficha Técnica:</b><br>{tecnica}<br><!-- update -->"
 
         atributos = []
 
         if detalhe.get("cor"):
-            atributos.append({
-                "name": "Cor",
-                "visible": True,
-                "variation": False,
-                "options": [detalhe.get("cor")]
-            })
+            atributos.append({"name": "Cor", "visible": True, "options": [detalhe.get("cor")]})
 
         if detalhe.get("voltagem"):
-            atributos.append({
-                "name": "Voltagem",
-                "visible": True,
-                "variation": False,
-                "options": [detalhe.get("voltagem")]
-            })
+            atributos.append({"name": "Voltagem", "visible": True, "options": [detalhe.get("voltagem")]})
 
         prod = {
             "name": detalhe.get("produto"),
             "sku": sku,
             "price": detalhe.get("precovenda", 0),
             "stock": int(detalhe.get("saldo", 0)),
-            "categoria": categoria,
-            "departamento": departamento,
             "descricao": descricao_final,
             "imagens": imagens,
-            "atributos": atributos
+            "atributos": atributos,
+            "categoria": categoria,
+            "departamento": departamento
         }
 
         enviar(prod)
