@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
-<title>Integrador Woo - Elite</title>
+<title>Integrador Woo - SaaS Dashboard</title>
 
 <style>
 body {
@@ -12,9 +12,7 @@ body {
     padding: 20px;
 }
 
-h1 {
-    color: #38bdf8;
-}
+h1 { color: #38bdf8; }
 
 button {
     border: none;
@@ -31,7 +29,7 @@ button {
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 10px;
 }
 
@@ -40,11 +38,6 @@ button {
     padding: 15px;
     border-radius: 10px;
     box-shadow: 0 0 10px #00000040;
-    transition: 0.3s;
-}
-
-.card:hover {
-    transform: scale(1.02);
 }
 
 .big {
@@ -73,7 +66,7 @@ button {
 pre {
     background: #020617;
     padding: 10px;
-    height: 300px;
+    height: 320px;
     overflow: auto;
     border-radius: 8px;
 }
@@ -82,7 +75,7 @@ pre {
 </head>
 <body>
 
-<h1>🚀 Integrador Woo - Elite Dashboard</h1>
+<h1>🚀 Integrador Woo - SaaS Dashboard</h1>
 
 <button class="btn-run" onclick="executar()">🔄 Executar</button>
 <button class="btn-stop" onclick="parar()">🛑 Parar</button>
@@ -92,6 +85,7 @@ pre {
 <div class="card">
 <h3>Status</h3>
 <div id="status" class="big"></div>
+<p>Modo: <span id="modo"></span></p>
 </div>
 
 <div class="card">
@@ -105,13 +99,19 @@ pre {
 <div class="card">
 <h3>Produtos</h3>
 <p>Total: <span id="total"></span></p>
+<p>Processados: <span id="processados"></span></p>
 <p>Atualizados: <span id="atualizados"></span></p>
 <p>Criados: <span id="criados"></span></p>
 </div>
 
 <div class="card">
+<h3>Fila</h3>
+<div id="fila" class="big"></div>
+</div>
+
+<div class="card">
 <h3>Erros</h3>
-<div id="erros" class="big red">0</div>
+<div id="erros" class="big">0</div>
 </div>
 
 </div>
@@ -150,15 +150,26 @@ async function atualizar() {
             inicio = null
         }
 
-        // PRODUTOS
+        // MODO
+        document.getElementById('modo').innerText = status.modo || "auto"
+
+        // DADOS
         document.getElementById('total').innerText = status.total || 0
+        document.getElementById('processados').innerText = status.processados || 0
         document.getElementById('atualizados').innerText = status.atualizados || 0
         document.getElementById('criados').innerText = status.criados || 0
-        document.getElementById('erros').innerText = status.erros || 0
+        document.getElementById('fila').innerText = status.fila || 0
 
-        // PROGRESSO
+        // ERROS COM COR
+        let erros = status.erros || 0
+        let elErro = document.getElementById('erros')
+
+        elErro.innerText = erros
+        elErro.className = erros > 0 ? "big red" : "big green"
+
+        // PROGRESSO REAL
         let total = status.total || 0
-        let feitos = (status.atualizados || 0) + (status.criados || 0)
+        let feitos = status.processados || 0
 
         let percent = total > 0 ? Math.floor((feitos / total) * 100) : 0
 
