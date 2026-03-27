@@ -73,7 +73,7 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= CACHE CATEGORIAS =================
+# ================= CACHE =================
 
 CACHE_CATEGORIAS = {}
 
@@ -111,7 +111,7 @@ def log(msg):
     if len(LOGS) > 300:
         LOGS.pop(0)
 
-# ================= WOO EXTRA =================
+# ================= WOO =================
 
 def get_produto_woo(sku):
     try:
@@ -120,6 +120,22 @@ def get_produto_woo(sku):
         return data[0] if data else None
     except:
         return None
+
+def get_todos_produtos_woo():
+    produtos = []
+    page = 1
+
+    while True:
+        r = requests.get(URL_WOO, auth=(CK, CS), params={"per_page": 100, "page": page})
+        data = r.json()
+
+        if not data:
+            break
+
+        produtos.extend(data)
+        page += 1
+
+    return produtos
 
 # ================= LOGIN =================
 
@@ -201,6 +217,31 @@ def enviar(prod):
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
+# ================= ZERAR AUSENTES =================
+
+def zerar_produtos_ausentes(skus_fornecedor):
+    produtos_woo = get_todos_produtos_woo()
+
+    for prod in produtos_woo:
+        sku = prod.get("sku")
+
+        if not sku:
+            continue
+
+        if sku not in skus_fornecedor:
+            try:
+                requests.put(
+                    f"{URL_WOO}/{prod['id']}",
+                    auth=(CK, CS),
+                    json={
+                        "stock_quantity": 0,
+                        "stock_status": "outofstock"
+                    }
+                )
+                log(f"🚫 zerado {sku}")
+            except:
+                log(f"❌ erro ao zerar {sku}")
+
 # ================= EXECUTAR =================
 
 def executar():
@@ -214,9 +255,12 @@ def executar():
     lista = r.json().get("itens", [])
     STATUS["total"] = len(lista)
 
+    skus_fornecedor = set()
+
     def processar(item):
 
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
+        skus_fornecedor.add(sku)
 
         detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
         if not detalhe:
@@ -259,6 +303,9 @@ def executar():
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         ex.map(processar, lista)
+
+    # 🔥 NOVO PASSO
+    zerar_produtos_ausentes(skus_fornecedor)
 
     STATUS["rodando"] = False
     log("✅ finalizado")
