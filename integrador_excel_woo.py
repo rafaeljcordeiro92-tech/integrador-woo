@@ -92,7 +92,6 @@ def safe_request(method, url, **kwargs):
             time.sleep(1)
     return None
 
-# 🔥 CORREÇÃO DEFINITIVA DAS CATEGORIAS
 def get_or_create_categoria(nome, parent=None):
     if not nome:
         return None
@@ -175,6 +174,12 @@ def enviar(prod):
         if woo:
             changes = mudou(prod, woo)
 
+            if not changes:
+                return
+
+            # 🔥 LIMPA categorias antigas
+            safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json={"categories": []})
+
             payload = {
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
@@ -184,22 +189,15 @@ def enviar(prod):
             }
 
             if desc_tecnica:
-                if (woo.get("description") or "").strip() != desc_tecnica:
-                    payload["description"] = desc_tecnica
-                    changes.append("📄 descrição técnica")
+                payload["description"] = desc_tecnica
 
             if desc_curta:
-                if (woo.get("short_description") or "").strip() != desc_curta:
-                    payload["short_description"] = desc_curta
-                    changes.append("📝 descrição curta")
-
-            if not changes:
-                return
+                payload["short_description"] = desc_curta
 
             safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
 
             STATUS["atualizados"] += 1
-            log(f"{prod['sku']} | {' | '.join(changes)}")
+            log(f"{prod['sku']} atualizado")
 
         else:
             payload = {
