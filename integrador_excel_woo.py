@@ -145,7 +145,7 @@ def enviar(prod):
             "stock_quantity": prod["stock"],
             "images": prod["imagens"],
             "attributes": prod["atributos"],
-            "categories": prod["categorias"]  # 🔥 NOVO
+            "categories": prod["categorias"]
         }
 
         if woo:
@@ -224,12 +224,12 @@ def executar():
         try:
             sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
-            # 🔥 NOVO (categorias)
+            # 🔥 CORREÇÃO AQUI
             id_departamento = item.get("iddepartamento")
-            id_sub = item.get("idsubdepartamento")
+            id_categoria = int(item.get("idcategoria") or 0)
 
             categoria = MAPA_DEPARTAMENTOS.get(id_departamento)
-            subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_sub)
+            subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria)
 
             categorias = []
 
@@ -274,7 +274,7 @@ def executar():
                 "descricao_tecnica": detalhe.get("descricaotecnica", ""),
                 "imagens": imagens,
                 "atributos": atributos,
-                "categorias": categorias  # 🔥 NOVO
+                "categorias": categorias
             }
 
             enviar(prod)
