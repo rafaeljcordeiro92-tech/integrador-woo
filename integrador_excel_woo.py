@@ -129,9 +129,6 @@ def mudou(prod, woo):
     if len(woo.get("images", [])) != len(prod["imagens"]):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
 
-    if (woo.get("description") or "") != prod["descricao"]:
-        mudancas.append("📄 descrição")
-
     return mudancas
 
 # ================= ENVIAR =================
@@ -153,13 +150,11 @@ def enviar(prod):
                 "attributes": prod["atributos"]
             }
 
-            # 🔥 DESCRIÇÃO LONGA (TÉCNICA)
             if desc_tecnica:
                 if (woo.get("description") or "").strip() != desc_tecnica:
                     payload["description"] = desc_tecnica
                     changes.append("📄 descrição técnica")
 
-            # 🔥 DESCRIÇÃO CURTA
             if desc_curta:
                 if (woo.get("short_description") or "").strip() != desc_curta:
                     payload["short_description"] = desc_curta
@@ -180,8 +175,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
-                "description": desc_tecnica if desc_tecnica else prod["name"],  # 🔥 LONGA
-                "short_description": desc_curta,  # 🔥 CURTA
+                "description": desc_tecnica if desc_tecnica else prod["name"],
+                "short_description": desc_curta,
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
@@ -196,6 +191,7 @@ def enviar(prod):
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ {prod['sku']} {e}")
+
 # ================= EXECUTAR =================
 
 def executar():
@@ -255,12 +251,14 @@ def executar():
                     "options": [detalhe.get("voltagem")]
                 })
 
+            # 🔥 CORREÇÃO FINAL AQUI
             prod = {
                 "name": detalhe.get("produto"),
                 "sku": sku,
                 "price": detalhe.get("precovenda", 0),
                 "stock": int(detalhe.get("saldo", 0)),
-                "descricao": detalhe.get("descricaodetalhada", ""),
+                "descricao_curta": detalhe.get("descricaodetalhada", ""),
+                "descricao_tecnica": detalhe.get("descricaotecnica", ""),
                 "imagens": imagens,
                 "atributos": atributos
             }
