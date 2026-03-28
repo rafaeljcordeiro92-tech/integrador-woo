@@ -129,9 +129,6 @@ def mudou(prod, woo):
     if len(woo.get("images", [])) != len(prod["imagens"]):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
 
-    if (woo.get("description") or "") != prod["descricao"]:
-        mudancas.append("📄 descrição")
-
     return mudancas
 
 # ================= ENVIAR =================
@@ -140,19 +137,31 @@ def enviar(prod):
     try:
         woo = get_produto_woo(prod["sku"])
 
+        desc_curta = (prod.get("descricao_curta") or "").strip()
+        desc_tecnica = (prod.get("descricao_tecnica") or "").strip()
+
         if woo:
             changes = mudou(prod, woo)
-
-            if not changes:
-                return
 
             payload = {
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
-                "description": prod["descricao"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
+
+            if desc_tecnica:
+                if (woo.get("description") or "").strip() != desc_tecnica:
+                    payload["description"] = desc_tecnica
+                    changes.append("📄 descrição técnica")
+
+            if desc_curta:
+                if (woo.get("short_description") or "").strip() != desc_curta:
+                    payload["short_description"] = desc_curta
+                    changes.append("📝 descrição curta")
+
+            if not changes:
+                return
 
             safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
 
@@ -166,6 +175,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
+                "description": desc_tecnica if desc_tecnica else prod["name"],
+                "short_description": desc_curta,
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
@@ -240,12 +251,14 @@ def executar():
                     "options": [detalhe.get("voltagem")]
                 })
 
+            # 🔥 CORREÇÃO FINAL AQUI
             prod = {
                 "name": detalhe.get("produto"),
                 "sku": sku,
                 "price": detalhe.get("precovenda", 0),
                 "stock": int(detalhe.get("saldo", 0)),
-                "descricao": detalhe.get("descricaodetalhada", ""),
+                "descricao_curta": detalhe.get("descricaodetalhada", ""),
+                "descricao_tecnica": detalhe.get("descricaotecnica", ""),
                 "imagens": imagens,
                 "atributos": atributos
             }
