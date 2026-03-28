@@ -129,6 +129,9 @@ def mudou(prod, woo):
     if len(woo.get("images", [])) != len(prod["imagens"]):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
 
+    if (woo.get("description") or "") != prod["descricao"]:
+        mudancas.append("📄 descrição")
+
     return mudancas
 
 # ================= ENVIAR =================
@@ -137,25 +140,19 @@ def enviar(prod):
     try:
         woo = get_produto_woo(prod["sku"])
 
-        descricao = (prod["descricao"] or "").strip()
-
         if woo:
             changes = mudou(prod, woo)
+
+            if not changes:
+                return
 
             payload = {
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
+                "description": prod["descricao"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
-
-            if descricao:
-                if (woo.get("description") or "").strip() != descricao:
-                    payload["description"] = descricao
-                    changes.append("📄 descrição")
-
-            if not changes:
-                return
 
             safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
 
@@ -169,7 +166,6 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
-                "description": descricao if descricao else prod["name"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
