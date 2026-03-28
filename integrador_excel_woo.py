@@ -92,6 +92,7 @@ def safe_request(method, url, **kwargs):
             time.sleep(1)
     return None
 
+# 🔥 CORREÇÃO DEFINITIVA DAS CATEGORIAS
 def get_or_create_categoria(nome, parent=None):
     if not nome:
         return None
@@ -100,12 +101,15 @@ def get_or_create_categoria(nome, parent=None):
     if key in CATEGORIA_CACHE:
         return CATEGORIA_CACHE[key]
 
-    r = safe_request("GET", URL_WOO_CAT, auth=(CK, CS), params={"search": nome})
+    r = safe_request("GET", URL_WOO_CAT, auth=(CK, CS), params={"per_page": 100})
 
     if r:
         for cat in r.json():
-            if cat["name"].lower() == nome.lower():
-                if (parent is None and cat["parent"] == 0) or (parent == cat["parent"]):
+            if cat["name"].strip().lower() == nome.strip().lower():
+                if parent is None and cat["parent"] == 0:
+                    CATEGORIA_CACHE[key] = cat["id"]
+                    return cat["id"]
+                if parent and cat["parent"] == parent:
                     CATEGORIA_CACHE[key] = cat["id"]
                     return cat["id"]
 
@@ -153,7 +157,6 @@ def mudou(prod, woo):
     if len(woo.get("images", [])) != len(prod["imagens"]):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
 
-    # 🔥 CORREÇÃO FINAL
     woo_cats = [c["id"] for c in woo.get("categories", [])]
     new_cats = [c["id"] for c in prod["categorias"]]
 
