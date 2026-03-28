@@ -18,6 +18,7 @@ USUARIO = "00905486986"
 SENHA = "Rafael2026@"
 
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
+URL_WOO_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
@@ -74,13 +75,14 @@ STATUS = {"rodando": False, "total": 0, "processados": 0, "atualizados": 0, "cri
 LOGS = []
 STOP = False
 
+# 🔥 NOVO (CATEGORIAS)
+CATEGORIA_CACHE = {}
+
 def log(msg):
     print(msg)
     LOGS.append(f"{datetime.now()} - {msg}")
     if len(LOGS) > 300:
         LOGS.pop(0)
-
-# ================= REQUEST =================
 
 def safe_request(method, url, **kwargs):
     for tentativa in range(3):
@@ -91,13 +93,41 @@ def safe_request(method, url, **kwargs):
             time.sleep(1)
     return None
 
-# ================= LOGIN =================
+# 🔥 NOVO (CATEGORIAS)
+def get_or_create_categoria(nome, parent=None):
+    if not nome:
+        return None
+
+    key = f"{nome}_{parent}"
+    if key in CATEGORIA_CACHE:
+        return CATEGORIA_CACHE[key]
+
+    r = safe_request("GET", URL_WOO_CAT, auth=(CK, CS), params={"search": nome})
+
+    if r:
+        for cat in r.json():
+            if cat["name"].lower() == nome.lower():
+                if (parent is None and cat["parent"] == 0) or (parent == cat["parent"]):
+                    CATEGORIA_CACHE[key] = cat["id"]
+                    return cat["id"]
+
+    payload = {"name": nome}
+    if parent:
+        payload["parent"] = parent
+
+    r = safe_request("POST", URL_WOO_CAT, auth=(CK, CS), json=payload)
+
+    if r and r.status_code in [200, 201]:
+        cat_id = r.json()["id"]
+        CATEGORIA_CACHE[key] = cat_id
+        log(f"📁 categoria criada: {nome}")
+        return cat_id
+
+    return None
 
 def login():
     r = safe_request("POST", LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
     return r and r.json().get("status")
-
-# ================= DETALHE =================
 
 def get_detalhe(id, x, y):
     r = safe_request("GET", f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}")
@@ -106,16 +136,12 @@ def get_detalhe(id, x, y):
     data = r.json()
     return data["itens"][0] if data.get("itens") else None
 
-# ================= WOO =================
-
 def get_produto_woo(sku):
     r = safe_request("GET", URL_WOO, auth=(CK, CS), params={"sku": sku})
     if not r:
         return None
     data = r.json()
     return data[0] if data else None
-
-# ================= COMPARAÇÃO =================
 
 def mudou(prod, woo):
     mudancas = []
@@ -130,8 +156,6 @@ def mudou(prod, woo):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
 
     return mudancas
-
-# ================= ENVIAR =================
 
 def enviar(prod):
     try:
@@ -148,18 +172,7 @@ def enviar(prod):
                 "stock_quantity": prod["stock"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"],
-                "categories": prod["categorias"],
-
-                # 🔥 NOVOS CAMPOS
-                "weight": str(prod.get("peso") or ""),
-                "dimensions": {
-                    "length": str(prod.get("comprimento") or ""),
-                    "width": str(prod.get("largura") or ""),
-                    "height": str(prod.get("altura") or "")
-                },
-                "meta_data": [
-                    {"key": "_ean", "value": prod.get("ean")}
-                ]
+                "categories": prod["categorias"]
             }
 
             if desc_tecnica:
@@ -191,18 +204,7 @@ def enviar(prod):
                 "short_description": desc_curta,
                 "images": prod["imagens"],
                 "attributes": prod["atributos"],
-                "categories": prod["categorias"],
-
-                # 🔥 NOVOS CAMPOS
-                "weight": str(prod.get("peso") or ""),
-                "dimensions": {
-                    "length": str(prod.get("comprimento") or ""),
-                    "width": str(prod.get("largura") or ""),
-                    "height": str(prod.get("altura") or "")
-                },
-                "meta_data": [
-                    {"key": "_ean", "value": prod.get("ean")}
-                ]
+                "categories": prod["categorias"]
             }
 
             safe_request("POST", URL_WOO, auth=(CK, CS), json=payload)
@@ -215,8 +217,6 @@ def enviar(prod):
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ {prod['sku']} {e}")
-
-# ================= EXECUTAR =================
 
 def executar():
     global STOP
@@ -255,13 +255,16 @@ def executar():
             categoria = MAPA_DEPARTAMENTOS.get(id_departamento)
             subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_sub)
 
+            # 🔥 CATEGORIA CORRETA
+            cat_pai_id = get_or_create_categoria(categoria)
+            cat_filho_id = get_or_create_categoria(subcategoria, parent=cat_pai_id)
+
             categorias = []
 
-            if categoria:
-                categorias.append({"name": categoria})
-
-            if subcategoria:
-                categorias.append({"name": subcategoria})
+            if cat_filho_id:
+                categorias.append({"id": cat_filho_id})
+            elif cat_pai_id:
+                categorias.append({"id": cat_pai_id})
 
             detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
             if not detalhe:
@@ -296,11 +299,6 @@ def executar():
                 "stock": int(detalhe.get("saldo", 0)),
                 "descricao_curta": detalhe.get("descricaodetalhada", ""),
                 "descricao_tecnica": detalhe.get("descricaotecnica", ""),
-                "ean": detalhe.get("ean"),
-                "peso": detalhe.get("peso"),
-                "altura": detalhe.get("altura"),
-                "largura": detalhe.get("largura"),
-                "comprimento": detalhe.get("profundidade"),
                 "imagens": imagens,
                 "atributos": atributos,
                 "categorias": categorias
@@ -316,8 +314,6 @@ def executar():
 
     STATUS["rodando"] = False
     log("✅ finalizado")
-
-# ================= ROTAS =================
 
 @app.route("/")
 def dashboard():
@@ -341,8 +337,6 @@ def status():
 @app.route("/logs")
 def logs():
     return jsonify(LOGS)
-
-# ================= START =================
 
 if __name__ == "__main__":
     log("🔥 iniciado")
