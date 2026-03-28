@@ -148,7 +148,18 @@ def enviar(prod):
                 "stock_quantity": prod["stock"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"],
-                "categories": prod["categorias"]
+                "categories": prod["categorias"],
+
+                # 🔥 NOVOS CAMPOS
+                "weight": str(prod.get("peso") or ""),
+                "dimensions": {
+                    "length": str(prod.get("comprimento") or ""),
+                    "width": str(prod.get("largura") or ""),
+                    "height": str(prod.get("altura") or "")
+                },
+                "meta_data": [
+                    {"key": "_ean", "value": prod.get("ean")}
+                ]
             }
 
             if desc_tecnica:
@@ -180,7 +191,18 @@ def enviar(prod):
                 "short_description": desc_curta,
                 "images": prod["imagens"],
                 "attributes": prod["atributos"],
-                "categories": prod["categorias"]
+                "categories": prod["categorias"],
+
+                # 🔥 NOVOS CAMPOS
+                "weight": str(prod.get("peso") or ""),
+                "dimensions": {
+                    "length": str(prod.get("comprimento") or ""),
+                    "width": str(prod.get("largura") or ""),
+                    "height": str(prod.get("altura") or "")
+                },
+                "meta_data": [
+                    {"key": "_ean", "value": prod.get("ean")}
+                ]
             }
 
             safe_request("POST", URL_WOO, auth=(CK, CS), json=payload)
@@ -227,7 +249,6 @@ def executar():
         try:
             sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
-            # 🔥 CATEGORIAS (PAI + FILHO)
             id_departamento = item.get("iddepartamento")
             id_sub = item.get("idsubdepartamento")
 
@@ -275,6 +296,11 @@ def executar():
                 "stock": int(detalhe.get("saldo", 0)),
                 "descricao_curta": detalhe.get("descricaodetalhada", ""),
                 "descricao_tecnica": detalhe.get("descricaotecnica", ""),
+                "ean": detalhe.get("ean"),
+                "peso": detalhe.get("peso"),
+                "altura": detalhe.get("altura"),
+                "largura": detalhe.get("largura"),
+                "comprimento": detalhe.get("profundidade"),
                 "imagens": imagens,
                 "atributos": atributos,
                 "categorias": categorias
