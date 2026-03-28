@@ -140,19 +140,33 @@ def enviar(prod):
     try:
         woo = get_produto_woo(prod["sku"])
 
+        desc_curta = (prod.get("descricao_curta") or "").strip()
+        desc_tecnica = (prod.get("descricao_tecnica") or "").strip()
+
         if woo:
             changes = mudou(prod, woo)
-
-            if not changes:
-                return
 
             payload = {
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
-                "description": prod["descricao"],
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
+
+            # 🔥 DESCRIÇÃO LONGA (TÉCNICA)
+            if desc_tecnica:
+                if (woo.get("description") or "").strip() != desc_tecnica:
+                    payload["description"] = desc_tecnica
+                    changes.append("📄 descrição técnica")
+
+            # 🔥 DESCRIÇÃO CURTA
+            if desc_curta:
+                if (woo.get("short_description") or "").strip() != desc_curta:
+                    payload["short_description"] = desc_curta
+                    changes.append("📝 descrição curta")
+
+            if not changes:
+                return
 
             safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
 
@@ -166,6 +180,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "manage_stock": True,
+                "description": desc_tecnica if desc_tecnica else prod["name"],  # 🔥 LONGA
+                "short_description": desc_curta,  # 🔥 CURTA
                 "images": prod["imagens"],
                 "attributes": prod["atributos"]
             }
@@ -180,7 +196,6 @@ def enviar(prod):
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ {prod['sku']} {e}")
-
 # ================= EXECUTAR =================
 
 def executar():
