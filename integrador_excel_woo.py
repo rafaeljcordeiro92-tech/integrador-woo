@@ -75,7 +75,6 @@ STATUS = {"rodando": False, "total": 0, "processados": 0, "atualizados": 0, "cri
 LOGS = []
 STOP = False
 
-# 🔥 NOVO (CATEGORIAS)
 CATEGORIA_CACHE = {}
 
 def log(msg):
@@ -93,7 +92,6 @@ def safe_request(method, url, **kwargs):
             time.sleep(1)
     return None
 
-# 🔥 NOVO (CATEGORIAS)
 def get_or_create_categoria(nome, parent=None):
     if not nome:
         return None
@@ -154,6 +152,13 @@ def mudou(prod, woo):
 
     if len(woo.get("images", [])) != len(prod["imagens"]):
         mudancas.append(f"🖼️ {len(woo.get('images', []))}→{len(prod['imagens'])}")
+
+    # 🔥 CORREÇÃO FINAL
+    woo_cats = [c["id"] for c in woo.get("categories", [])]
+    new_cats = [c["id"] for c in prod["categorias"]]
+
+    if sorted(woo_cats) != sorted(new_cats):
+        mudancas.append("📁 categoria")
 
     return mudancas
 
@@ -255,7 +260,6 @@ def executar():
             categoria = MAPA_DEPARTAMENTOS.get(id_departamento)
             subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_sub)
 
-            # 🔥 CATEGORIA CORRETA
             cat_pai_id = get_or_create_categoria(categoria)
             cat_filho_id = get_or_create_categoria(subcategoria, parent=cat_pai_id)
 
