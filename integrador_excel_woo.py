@@ -140,31 +140,31 @@ def enviar(prod):
         desc_curta = (prod.get("descricao_curta") or "").strip()
         desc_tecnica = (prod.get("descricao_tecnica") or "").strip()
 
-        payload_base = {
-            "regular_price": str(prod["price"]),
-            "stock_quantity": prod["stock"],
-            "images": prod["imagens"],
-            "attributes": prod["atributos"],
-            "categories": prod["categorias"]
-        }
-
         if woo:
             changes = mudou(prod, woo)
 
+            payload = {
+                "regular_price": str(prod["price"]),
+                "stock_quantity": prod["stock"],
+                "images": prod["imagens"],
+                "attributes": prod["atributos"],
+                "categories": prod["categorias"]
+            }
+
             if desc_tecnica:
                 if (woo.get("description") or "").strip() != desc_tecnica:
-                    payload_base["description"] = desc_tecnica
+                    payload["description"] = desc_tecnica
                     changes.append("📄 descrição técnica")
 
             if desc_curta:
                 if (woo.get("short_description") or "").strip() != desc_curta:
-                    payload_base["short_description"] = desc_curta
+                    payload["short_description"] = desc_curta
                     changes.append("📝 descrição curta")
 
             if not changes:
                 return
 
-            safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload_base)
+            safe_request("PUT", f"{URL_WOO}/{woo['id']}", auth=(CK, CS), json=payload)
 
             STATUS["atualizados"] += 1
             log(f"{prod['sku']} | {' | '.join(changes)}")
@@ -173,12 +173,15 @@ def enviar(prod):
             payload = {
                 "name": prod["name"],
                 "sku": prod["sku"],
+                "regular_price": str(prod["price"]),
+                "stock_quantity": prod["stock"],
                 "manage_stock": True,
-                **payload_base
+                "description": desc_tecnica if desc_tecnica else prod["name"],
+                "short_description": desc_curta,
+                "images": prod["imagens"],
+                "attributes": prod["atributos"],
+                "categories": prod["categorias"]
             }
-
-            payload["description"] = desc_tecnica if desc_tecnica else prod["name"]
-            payload["short_description"] = desc_curta
 
             safe_request("POST", URL_WOO, auth=(CK, CS), json=payload)
 
@@ -224,12 +227,12 @@ def executar():
         try:
             sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
-            # 🔥 CORREÇÃO AQUI
+            # 🔥 CATEGORIAS (PAI + FILHO)
             id_departamento = item.get("iddepartamento")
-            id_categoria = int(item.get("idcategoria") or 0)
+            id_sub = item.get("idsubdepartamento")
 
             categoria = MAPA_DEPARTAMENTOS.get(id_departamento)
-            subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria)
+            subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_sub)
 
             categorias = []
 

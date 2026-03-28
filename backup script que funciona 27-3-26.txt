@@ -147,7 +147,8 @@ def enviar(prod):
                 "regular_price": str(prod["price"]),
                 "stock_quantity": prod["stock"],
                 "images": prod["imagens"],
-                "attributes": prod["atributos"]
+                "attributes": prod["atributos"],
+                "categories": prod["categorias"]
             }
 
             if desc_tecnica:
@@ -178,7 +179,8 @@ def enviar(prod):
                 "description": desc_tecnica if desc_tecnica else prod["name"],
                 "short_description": desc_curta,
                 "images": prod["imagens"],
-                "attributes": prod["atributos"]
+                "attributes": prod["atributos"],
+                "categories": prod["categorias"]
             }
 
             safe_request("POST", URL_WOO, auth=(CK, CS), json=payload)
@@ -225,6 +227,21 @@ def executar():
         try:
             sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
+            # 🔥 CATEGORIAS (PAI + FILHO)
+            id_departamento = item.get("iddepartamento")
+            id_sub = item.get("idsubdepartamento")
+
+            categoria = MAPA_DEPARTAMENTOS.get(id_departamento)
+            subcategoria = MAPA_SUBDEPARTAMENTOS.get(id_sub)
+
+            categorias = []
+
+            if categoria:
+                categorias.append({"name": categoria})
+
+            if subcategoria:
+                categorias.append({"name": subcategoria})
+
             detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
             if not detalhe:
                 continue
@@ -251,7 +268,6 @@ def executar():
                     "options": [detalhe.get("voltagem")]
                 })
 
-            # 🔥 CORREÇÃO FINAL AQUI
             prod = {
                 "name": detalhe.get("produto"),
                 "sku": sku,
@@ -260,7 +276,8 @@ def executar():
                 "descricao_curta": detalhe.get("descricaodetalhada", ""),
                 "descricao_tecnica": detalhe.get("descricaotecnica", ""),
                 "imagens": imagens,
-                "atributos": atributos
+                "atributos": atributos,
+                "categorias": categorias
             }
 
             enviar(prod)
