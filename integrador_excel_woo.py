@@ -268,10 +268,11 @@ def executar():
 
             categorias = []
 
+            if cat_pai_id:
+                categorias.append({"id": cat_pai_id})
+
             if cat_filho_id:
                 categorias.append({"id": cat_filho_id})
-            elif cat_pai_id:
-                categorias.append({"id": cat_pai_id})
 
             detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
             if not detalhe:
