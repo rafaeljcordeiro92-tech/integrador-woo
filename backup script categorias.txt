@@ -174,8 +174,8 @@ def enviar(prod):
         "manage_stock": True,
         "stock_status": "instock" if estoque_novo > 0 else "outofstock",
         "status": "publish",
-        "description": prod["descricao"],
-        "short_description": prod["descricao"],
+        "description": prod.get("descricao_tecnica", ""),
+        "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
         "images": prod["imagens"],
         "attributes": prod["atributos"]
@@ -233,7 +233,8 @@ def executar():
             for url in img.get("grande", []):
                 imagens.append({"src": url})
 
-        descricao_final = f"{detalhe.get('descricaodetalhada','')}<br><br><b>Ficha Técnica:</b><br>{detalhe.get('descricaotecnica','')}"
+        descricao_curta = detalhe.get("descricaodetalhada", "")
+        descricao_tecnica = detalhe.get("descricaotecnica", "")
 
         atributos = []
 
@@ -248,7 +249,8 @@ def executar():
             "sku": sku,
             "price": detalhe.get("precovenda", 0),
             "stock": int(detalhe.get("saldo", 0)),
-            "descricao": descricao_final,
+            "descricao_curta": descricao_curta,
+            "descricao_tecnica": descricao_tecnica,
             "imagens": imagens,
             "atributos": atributos,
             "categoria": categoria,
