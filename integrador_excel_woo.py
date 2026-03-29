@@ -109,7 +109,7 @@ STATUS = {
     "atualizados": 0,
     "criados": 0,
     "erros": 0,
-    "fila": 0           # 👈 ADICIONADO
+    "fila": 0,           # 👈 ADICIONADO
     "inicio": None,        # 👈 NOVO
     "velocidade": 0,       # 👈 NOVO
     "tempo_restante": 0    # 👈 NOVO
@@ -183,31 +183,31 @@ def get_detalhe(id, x, y):
 
 def enviar(prod):
 
-# 🔥 FILTRO AQUI
-if deve_bloquear(prod["name"]):
-    prod_woo = get_produto_woo(prod["sku"])
-    if prod_woo:
-        deletar_produto_woo(prod_woo["id"], prod["sku"])
-    log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
+    # 🔥 FILTRO AQUI
+    if deve_bloquear(prod["name"]):
+        prod_woo = get_produto_woo(prod["sku"])
+        if prod_woo:
+            deletar_produto_woo(prod_woo["id"], prod["sku"])
+        log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
 
-    # ✅ PROGRESSO
-    STATUS["processados"] += 1
-    STATUS["fila"] = STATUS["total"] - STATUS["processados"]
+        # ✅ PROGRESSO
+        STATUS["processados"] += 1
+        STATUS["fila"] = STATUS["total"] - STATUS["processados"]
 
-    # 🔥 VELOCIDADE + TEMPO RESTANTE
-    tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
+        # 🔥 VELOCIDADE + TEMPO RESTANTE
+        tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
 
-    if tempo_decorrido > 0:
-        STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
+        if tempo_decorrido > 0:
+            STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
 
-        restante = STATUS["total"] - STATUS["processados"]
+            restante = STATUS["total"] - STATUS["processados"]
 
-        if STATUS["velocidade"] > 0:
-            STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
-        else:
-            STATUS["tempo_restante"] = 0
+            if STATUS["velocidade"] > 0:
+                STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
+            else:
+                STATUS["tempo_restante"] = 0
 
-    return
+        return
 
     prod_woo = get_produto_woo(prod["sku"])
     prod_id = prod_woo["id"] if prod_woo else None
@@ -264,9 +264,21 @@ if deve_bloquear(prod["name"]):
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
-# 🔥 GARANTE QUE SEMPRE CONTA NO PROGRESSO (SUCESSO OU ERRO)
+    # 🔥 PROGRESSO FINAL
     STATUS["processados"] += 1
     STATUS["fila"] = STATUS["total"] - STATUS["processados"]
+
+    tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
+
+    if tempo_decorrido > 0:
+        STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
+
+        restante = STATUS["total"] - STATUS["processados"]
+
+        if STATUS["velocidade"] > 0:
+            STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
+        else:
+            STATUS["tempo_restante"] = 0
 
 # ================= EXECUTAR =================
 
