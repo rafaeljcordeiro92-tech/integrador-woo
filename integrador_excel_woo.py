@@ -121,6 +121,30 @@ def get_produto_woo(sku):
     except:
         return None
 
+def deletar_produto_woo(prod_id, sku):
+    try:
+        requests.delete(f"{URL_WOO}/{prod_id}", auth=(CK, CS), params={"force": True})
+        log(f"🗑️ removido do Woo: {sku}")
+    except Exception as e:
+        log(f"❌ erro ao deletar {sku}: {e}")
+
+# ================= FILTRO =================
+
+def deve_bloquear(nome):
+    nome_upper = nome.upper()
+
+    if "BEM MM" in nome_upper:
+        return True
+
+    if "CHIP" in nome_upper:
+        return True
+
+    palavras = nome_upper.split()
+    if "MM" in palavras:
+        return True
+
+    return False
+
 # ================= LOGIN =================
 
 def login():
@@ -146,6 +170,15 @@ def get_detalhe(id, x, y):
 # ================= ENVIAR =================
 
 def enviar(prod):
+
+    # 🔥 FILTRO AQUI
+    if deve_bloquear(prod["name"]):
+        prod_woo = get_produto_woo(prod["sku"])
+        if prod_woo:
+            deletar_produto_woo(prod_woo["id"], prod["sku"])
+        log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
+        return
+
     prod_woo = get_produto_woo(prod["sku"])
     prod_id = prod_woo["id"] if prod_woo else None
 
