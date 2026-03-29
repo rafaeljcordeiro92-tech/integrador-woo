@@ -1,9 +1,6 @@
 import requests
 import threading
 import os
-import time
-import random
-import hashlib
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, jsonify, send_from_directory
@@ -76,22 +73,6 @@ MAPA_SUBDEPARTAMENTOS = {
     1191020000: "COLCHÕES DE SOLTEIRO", 1193010000: "CONJUNTO BOX SOLTEIRO"
 }
 
-# ================= CONTROLE =================
-
-CACHE_HASH = {}
-LOG_ATUALIZADOS = []
-LOG_CRIADOS = []
-
-def delay_humano():
-    time.sleep(random.uniform(1.2, 3.0))
-
-def pode_rodar():
-    return 8 <= datetime.now().hour <= 18
-
-def gerar_hash(prod):
-    base = f"{prod['price']}-{prod['stock']}-{len(prod['imagens'])}"
-    return hashlib.md5(base.encode()).hexdigest()
-
 # ================= CACHE CATEGORIAS =================
 
 CACHE_CATEGORIAS = {}
@@ -130,7 +111,7 @@ def log(msg):
     if len(LOGS) > 300:
         LOGS.pop(0)
 
-# ================= WOO =================
+# ================= WOO EXTRA =================
 
 def get_produto_woo(sku):
     try:
@@ -157,7 +138,6 @@ def get_detalhe(id, x, y):
     try:
         url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
         r = session.get(url, timeout=20)
-        delay_humano()
         data = r.json()
         return data["itens"][0] if data.get("itens") else None
     except:
@@ -166,14 +146,16 @@ def get_detalhe(id, x, y):
 # ================= ENVIAR =================
 
 def enviar(prod):
-
-    hash_atual = gerar_hash(prod)
-    if CACHE_HASH.get(prod["sku"]) == hash_atual:
-        return
-    CACHE_HASH[prod["sku"]] = hash_atual
-
     prod_woo = get_produto_woo(prod["sku"])
     prod_id = prod_woo["id"] if prod_woo else None
+
+    preco_antigo = prod_woo.get("regular_price") if prod_woo else "-"
+    estoque_antigo = prod_woo.get("stock_quantity") if prod_woo else "-"
+    imagens_antigas = len(prod_woo.get("images", [])) if prod_woo else 0
+
+    preco_novo = str(prod["price"])
+    estoque_novo = int(prod["stock"])
+    imagens_novas = len(prod["imagens"])
 
     cat_depto_id = get_or_create_category(prod["departamento"])
     cat_sub_id = get_or_create_category(prod["categoria"])
@@ -187,10 +169,10 @@ def enviar(prod):
     payload = {
         "name": prod["name"],
         "sku": prod["sku"],
-        "regular_price": str(prod["price"]),
-        "stock_quantity": prod["stock"],
+        "regular_price": preco_novo,
+        "stock_quantity": estoque_novo,
         "manage_stock": True,
-        "stock_status": "instock" if prod["stock"] > 0 else "outofstock",
+        "stock_status": "instock" if estoque_novo > 0 else "outofstock",
         "status": "publish",
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
@@ -201,18 +183,19 @@ def enviar(prod):
 
     try:
         if prod_id:
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+
             STATUS["atualizados"] += 1
-            LOG_ATUALIZADOS.append(prod["sku"])
-            log(f"♻️ {prod['sku']} atualizado")
+
+            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
-            STATUS["criados"] += 1
-            LOG_CRIADOS.append(prod["sku"])
-            log(f"🆕 {prod['sku']} criado")
 
-        delay_humano()
+            STATUS["criados"] += 1
+
+            log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
     except Exception as e:
         STATUS["erros"] += 1
@@ -250,15 +233,24 @@ def executar():
             for url in img.get("grande", []):
                 imagens.append({"src": url})
 
+        descricao_curta = detalhe.get("descricaodetalhada", "")
+        descricao_tecnica = detalhe.get("descricaotecnica", "")
+
         atributos = []
+
+        if detalhe.get("cor"):
+            atributos.append({"name": "Cor", "visible": True, "options": [detalhe.get("cor")]})
+
+        if detalhe.get("voltagem"):
+            atributos.append({"name": "Voltagem", "visible": True, "options": [detalhe.get("voltagem")]})
 
         prod = {
             "name": detalhe.get("produto"),
             "sku": sku,
             "price": detalhe.get("precovenda", 0),
             "stock": int(detalhe.get("saldo", 0)),
-            "descricao_curta": detalhe.get("descricaodetalhada", ""),
-            "descricao_tecnica": detalhe.get("descricaotecnica", ""),
+            "descricao_curta": descricao_curta,
+            "descricao_tecnica": descricao_tecnica,
             "imagens": imagens,
             "atributos": atributos,
             "categoria": categoria,
@@ -272,14 +264,6 @@ def executar():
 
     STATUS["rodando"] = False
     log("✅ finalizado")
-
-# ================= LOOP =================
-
-def loop_automatico():
-    while True:
-        if pode_rodar():
-            executar()
-        time.sleep(1800)
 
 # ================= ROTAS =================
 
@@ -312,6 +296,5 @@ def executar_manual():
 
 if __name__ == "__main__":
     log("🔥 iniciado")
-    threading.Thread(target=loop_automatico).start()
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
