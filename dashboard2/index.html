@@ -29,7 +29,7 @@ button {
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 10px;
 }
 
@@ -114,6 +114,12 @@ pre {
 <div id="erros" class="big">0</div>
 </div>
 
+<div class="card">
+<h3>⚡ Performance</h3>
+<p>Velocidade: <span id="velocidade">0</span> prod/s</p>
+<p>Tempo restante: <span id="restante">0</span>s</p>
+</div>
+
 </div>
 
 <div class="card">
@@ -124,12 +130,6 @@ pre {
 <div class="card">
 <h3>📜 Logs em tempo real</h3>
 <pre id="logs"></pre>
-</div>
-
-<div class="card">
-<h3>⚡ Performance</h3>
-<p>Velocidade: <span id="velocidade">0</span> prod/s</p>
-<p>Tempo restante: <span id="restante">0</span>s</p>
 </div>
 
 <script>
@@ -165,17 +165,14 @@ async function atualizar() {
         document.getElementById('atualizados').innerText = status.atualizados || 0
         document.getElementById('criados').innerText = status.criados || 0
         document.getElementById('fila').innerText = status.fila || 0
-        document.getElementById('velocidade').innerText = status.velocidade || 0
-        document.getElementById('restante').innerText = status.tempo_restante || 0
 
-        // ERROS COM COR
+        // ERROS
         let erros = status.erros || 0
         let elErro = document.getElementById('erros')
-
         elErro.innerText = erros
         elErro.className = erros > 0 ? "big red" : "big green"
 
-        // PROGRESSO REAL
+        // PROGRESSO
         let total = status.total || 0
         let feitos = status.processados || 0
 
@@ -184,7 +181,11 @@ async function atualizar() {
         document.getElementById('percent').innerText = percent + "%"
         document.getElementById('barra').style.width = percent + "%"
 
-        // TEMPO
+        // PERFORMANCE
+        document.getElementById('velocidade').innerText = status.velocidade || 0
+        document.getElementById('restante').innerText = status.tempo_restante || 0
+
+        // TEMPO EXECUÇÃO
         if (inicio) {
             let tempo = Math.floor((Date.now() - inicio) / 1000)
             document.getElementById('tempo').innerText = tempo + "s"
