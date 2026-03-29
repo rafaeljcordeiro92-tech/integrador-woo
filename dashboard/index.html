@@ -126,6 +126,12 @@ pre {
 <pre id="logs"></pre>
 </div>
 
+<div class="card">
+<h3>⚡ Performance</h3>
+<p>Velocidade: <span id="velocidade">0</span> prod/s</p>
+<p>Tempo restante: <span id="restante">0</span>s</p>
+</div>
+
 <script>
 
 let inicio = null
@@ -159,6 +165,8 @@ async function atualizar() {
         document.getElementById('atualizados').innerText = status.atualizados || 0
         document.getElementById('criados').innerText = status.criados || 0
         document.getElementById('fila').innerText = status.fila || 0
+        document.getElementById('velocidade').innerText = status.velocidade || 0
+        document.getElementById('restante').innerText = status.tempo_restante || 0
 
         // ERROS COM COR
         let erros = status.erros || 0

@@ -102,7 +102,19 @@ def get_or_create_category(nome):
 
 # ================= STATUS =================
 
-STATUS = {"rodando": False, "total": 0, "atualizados": 0, "criados": 0, "erros": 0}
+STATUS = {
+    "rodando": False,
+    "total": 0,
+    "processados": 0,   # 👈 ADICIONADO
+    "atualizados": 0,
+    "criados": 0,
+    "erros": 0,
+    "fila": 0           # 👈 ADICIONADO
+    "inicio": None,        # 👈 NOVO
+    "velocidade": 0,       # 👈 NOVO
+    "tempo_restante": 0    # 👈 NOVO
+}
+
 LOGS = []
 
 def log(msg):
@@ -171,13 +183,31 @@ def get_detalhe(id, x, y):
 
 def enviar(prod):
 
-    # 🔥 FILTRO AQUI
-    if deve_bloquear(prod["name"]):
-        prod_woo = get_produto_woo(prod["sku"])
-        if prod_woo:
-            deletar_produto_woo(prod_woo["id"], prod["sku"])
-        log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
-        return
+# 🔥 FILTRO AQUI
+if deve_bloquear(prod["name"]):
+    prod_woo = get_produto_woo(prod["sku"])
+    if prod_woo:
+        deletar_produto_woo(prod_woo["id"], prod["sku"])
+    log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
+
+    # ✅ PROGRESSO
+    STATUS["processados"] += 1
+    STATUS["fila"] = STATUS["total"] - STATUS["processados"]
+
+    # 🔥 VELOCIDADE + TEMPO RESTANTE
+    tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
+
+    if tempo_decorrido > 0:
+        STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
+
+        restante = STATUS["total"] - STATUS["processados"]
+
+        if STATUS["velocidade"] > 0:
+            STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
+        else:
+            STATUS["tempo_restante"] = 0
+
+    return
 
     prod_woo = get_produto_woo(prod["sku"])
     prod_id = prod_woo["id"] if prod_woo else None
@@ -234,10 +264,15 @@ def enviar(prod):
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
+# 🔥 GARANTE QUE SEMPRE CONTA NO PROGRESSO (SUCESSO OU ERRO)
+    STATUS["processados"] += 1
+    STATUS["fila"] = STATUS["total"] - STATUS["processados"]
+
 # ================= EXECUTAR =================
 
 def executar():
-    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0})
+    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0,        "inicio": datetime.now().timestamp()
+})
 
     if not login():
         STATUS["rodando"] = False
