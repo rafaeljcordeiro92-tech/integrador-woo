@@ -375,6 +375,12 @@ def auto_execucao():
             time.sleep(600)
 
 
+# ================= AUTO EXECUÇÃO =================
+
+# 🚀 AUTO START PARA RAILWAY
+threading.Thread(target=auto_execucao, daemon=True).start()
+
+
 # ================= ROTAS =================
 
 @app.route("/")
@@ -406,9 +412,6 @@ def executar_manual():
 
 if __name__ == "__main__":
     log("🔥 iniciado")
-
-    # 🚀 inicia execução automática em paralelo
-    threading.Thread(target=auto_execucao, daemon=True).start()
 
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
