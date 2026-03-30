@@ -19,12 +19,51 @@ SENHA = "Rafael2026@"
 
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 URL_WOO_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
+URL_MEDIA = "https://moveisdolar.com.br/wp-json/wp/v2/media"  # 🔥 ADICIONADO
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
 MAX_WORKERS = 2
 session = requests.Session()
+
+# ================= UPLOAD IMAGEM =================
+
+def upload_imagem_wp(url, sku):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=30)
+
+        if r.status_code != 200:
+            log(f"❌ erro download imagem {url}")
+            return None
+
+        nome = f"{sku}.jpg"
+
+        files = {
+            "file": (nome, r.content, "image/jpeg")
+        }
+
+        headers_upload = {
+            "Content-Disposition": f"attachment; filename={nome}"
+        }
+
+        r2 = requests.post(
+            URL_MEDIA,
+            auth=(CK, CS),
+            headers=headers_upload,
+            files=files
+        )
+
+        if r2.status_code in [200, 201]:
+            return r2.json().get("source_url")
+        else:
+            log(f"❌ erro upload WP {r2.text}")
+
+    except Exception as e:
+        log(f"❌ erro upload imagem {e}")
+
+    return None
 
 # ================= MAPAS =================
 
@@ -105,19 +144,17 @@ def get_or_create_category(nome):
 STATUS = {
     "rodando": False,
     "total": 0,
-    "processados": 0,   # 👈 ADICIONADO
+    "processados": 0,
     "atualizados": 0,
     "criados": 0,
     "erros": 0,
-    "fila": 0,           # 👈 ADICIONADO
-    "inicio": None,        # 👈 NOVO
-    "velocidade": 0,       # 👈 NOVO
-    "tempo_restante": 0    # 👈 NOVO
+    "fila": 0,
+    "inicio": None,
+    "velocidade": 0,
+    "tempo_restante": 0
 }
 
 LOGS = []
-
-# 🔥 ADICIONA AQUI
 LOG_ATUALIZADOS = []
 LOG_CRIADOS = []
 
@@ -187,28 +224,11 @@ def get_detalhe(id, x, y):
 
 def enviar(prod):
 
-    # 🔥 FILTRO AQUI
     if deve_bloquear(prod["name"]):
         prod_woo = get_produto_woo(prod["sku"])
         if prod_woo:
             deletar_produto_woo(prod_woo["id"], prod["sku"])
         log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
-
-        # ✅ PROGRESSO
-        STATUS["processados"] += 1
-        STATUS["fila"] = STATUS["total"] - STATUS["processados"]
-
-        tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
-
-        if tempo_decorrido > 0:
-            STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
-            restante = STATUS["total"] - STATUS["processados"]
-
-            if STATUS["velocidade"] > 0:
-                STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
-            else:
-                STATUS["tempo_restante"] = 0
-
         return
 
     prod_woo = get_produto_woo(prod["sku"])
@@ -231,6 +251,13 @@ def enviar(prod):
     if cat_sub_id:
         categorias.append({"id": cat_sub_id})
 
+    # 🔥 AQUI ÚNICA ALTERAÇÃO
+    imagens_upload = []
+    for img in prod["imagens"]:
+        url_wp = upload_imagem_wp(img["src"], prod["sku"])
+        if url_wp:
+            imagens_upload.append({"src": url_wp})
+
     payload = {
         "name": prod["name"],
         "sku": prod["sku"],
@@ -242,7 +269,7 @@ def enviar(prod):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": prod["imagens"],
+        "images": imagens_upload,
         "attributes": prod["atributos"]
     }
 
@@ -276,8 +303,7 @@ def enviar(prod):
 # ================= EXECUTAR =================
 
 def executar():
-    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0,        "inicio": datetime.now().timestamp()
-})
+    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0, "inicio": datetime.now().timestamp()})
 
     if not login():
         STATUS["rodando"] = False
