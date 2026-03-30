@@ -24,6 +24,9 @@ URL_MEDIA = "https://moveisdolar.com.br/wp-json/wp/v2/media"  # 🔥 ADICIONADO
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
+WP_USER = "admin"
+WP_PASS = "UcLe k2Ir ZIdt lVJO 6wtx 2F5H"
+
 MAX_WORKERS = 2
 session = requests.Session()
 
@@ -50,7 +53,7 @@ def upload_imagem_wp(url, sku):
 
         r2 = requests.post(
             URL_MEDIA,
-            auth=(CK, CS),
+            auth=(WP_USER, WP_PASS),
             headers=headers_upload,
             files=files
         )
