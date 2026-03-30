@@ -33,38 +33,44 @@ session = requests.Session()
 # ================= UPLOAD IMAGEM =================
 
 def upload_imagem_wp(url, sku):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=30)
 
-        if r.status_code != 200:
-            log(f"❌ erro download imagem {url}")
-            return None
+    for tentativa in range(3):  # 🔥 tenta até 3 vezes
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
 
-        nome = f"{sku}.jpg"
+            # 🔥 download com timeout
+            r = requests.get(url, headers=headers, timeout=30)
 
-        files = {
-            "file": (nome, r.content, "image/jpeg")
-        }
+            if r.status_code != 200:
+                log(f"❌ erro download imagem {url} tentativa {tentativa+1}")
+                continue
 
-        headers_upload = {
-            "Content-Disposition": f"attachment; filename={nome}"
-        }
+            nome = f"{sku}.jpg"
 
-        r2 = requests.post(
-            URL_MEDIA,
-            auth=(WP_USER, WP_PASS),
-            headers=headers_upload,
-            files=files
-        )
+            files = {
+                "file": (nome, r.content, "image/jpeg")
+            }
 
-        if r2.status_code in [200, 201]:
-            return r2.json().get("source_url")
-        else:
-            log(f"❌ erro upload WP {r2.text}")
+            headers_upload = {
+                "Content-Disposition": f"attachment; filename={nome}"
+            }
 
-    except Exception as e:
-        log(f"❌ erro upload imagem {e}")
+            # 🔥 upload com timeout
+            r2 = requests.post(
+                URL_MEDIA,
+                auth=(WP_USER, WP_PASS),
+                headers=headers_upload,
+                files=files,
+                timeout=30
+            )
+
+            if r2.status_code in [200, 201]:
+                return r2.json().get("source_url")
+            else:
+                log(f"❌ erro upload WP tentativa {tentativa+1} - {r2.text}")
+
+        except Exception as e:
+            log(f"⚠️ erro tentativa {tentativa+1} upload imagem {e}")
 
     return None
 
