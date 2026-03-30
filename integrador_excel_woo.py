@@ -408,6 +408,31 @@ def executar_manual():
     threading.Thread(target=executar).start()
     return "ok"
 
+
+# 🛑 PARA EXECUÇÃO ATUAL (não roda novamente automaticamente)
+@app.route("/parar")
+def parar():
+    STATUS["rodando"] = False
+    log("🛑 execução atual interrompida")
+    return "ok"
+
+
+# 🛑 PARA TUDO (inclusive automático)
+@app.route("/parar_total")
+def parar_total():
+    STATUS["auto"] = False
+    STATUS["rodando"] = False
+    log("🛑 sistema pausado totalmente")
+    return "ok"
+
+
+# ▶️ VOLTA EXECUÇÃO AUTOMÁTICA
+@app.route("/iniciar_total")
+def iniciar_total():
+    STATUS["auto"] = True
+    log("▶️ sistema reativado")
+    return "ok"
+
 # ================= START =================
 
 if __name__ == "__main__":
