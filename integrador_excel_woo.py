@@ -190,16 +190,13 @@ def enviar(prod):
             deletar_produto_woo(prod_woo["id"], prod["sku"])
         log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
 
-        # ✅ PROGRESSO
         STATUS["processados"] += 1
         STATUS["fila"] = STATUS["total"] - STATUS["processados"]
 
-        # 🔥 VELOCIDADE + TEMPO RESTANTE
         tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
 
         if tempo_decorrido > 0:
             STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
-
             restante = STATUS["total"] - STATUS["processados"]
 
             if STATUS["velocidade"] > 0:
@@ -219,6 +216,12 @@ def enviar(prod):
     preco_novo = str(prod["price"])
     estoque_novo = int(prod["stock"])
     imagens_novas = len(prod["imagens"])
+
+    # 🔥 LOG DE DEBUG IMAGEM
+    if not prod["imagens"]:
+        log(f"⚠️ SEM IMAGEM: {prod['sku']}")
+    else:
+        log(f"🖼️ enviando imagem: {prod['imagens'][0].get('src')}")
 
     cat_depto_id = get_or_create_category(prod["departamento"])
     cat_sub_id = get_or_create_category(prod["categoria"])
@@ -240,25 +243,30 @@ def enviar(prod):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": prod["imagens"],
+        "images": prod["imagens"],  # 🔥 SEMPRE ENVIA
         "attributes": prod["atributos"]
     }
 
     try:
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            r = requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
-            STATUS["atualizados"] += 1
+            if r.status_code not in [200, 201]:
+                log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
+            else:
+                STATUS["atualizados"] += 1
 
-            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
+                log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
 
-            STATUS["criados"] += 1
+            if r.status_code not in [200, 201]:
+                log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
+            else:
+                STATUS["criados"] += 1
 
-            log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
+                log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
     except Exception as e:
         STATUS["erros"] += 1
