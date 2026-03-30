@@ -248,17 +248,17 @@ def enviar(prod):
         "attributes": prod["atributos"]
     }
 
-    try:
-        if prod_id:
-            r = requests.post(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+try:
+    if prod_id:
+        r = requests.post(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
-            if r.status_code not in [200, 201]:
-                log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
-            else:
-                STATUS["atualizados"] += 1
-                LOG_ATUALIZADOS.append(prod["sku"])
+        if r.status_code not in [200, 201]:
+            log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
+        else:
+            STATUS["atualizados"] += 1
+            LOG_ATUALIZADOS.append(prod["sku"])
 
-                log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
+            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
     else:
         r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
