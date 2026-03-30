@@ -10,6 +10,8 @@ from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__)
 
+iniciar_loop()  # 👈 ESSA LINHA É A CHAVE
+
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
