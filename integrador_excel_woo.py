@@ -157,6 +157,13 @@ def deve_bloquear(nome):
 
     return False
 
+
+# ================= HORÁRIO =================
+
+def horario_comercial():
+    agora = datetime.now()
+    return 8 <= agora.hour <= 18
+
 # ================= LOGIN =================
 
 def login():
@@ -345,6 +352,29 @@ def executar():
     STATUS["rodando"] = False
     log("✅ finalizado")
 
+
+# ================= AUTO EXECUÇÃO =================
+def auto_execucao():
+    import time
+    import random
+
+    while True:
+
+        if horario_comercial():
+
+            if not STATUS["rodando"]:
+                log("🤖 execução automática (modo humano)")
+                executar()
+
+                pausa = random.randint(300, 900)  # 5 a 15 min
+                log(f"⏳ aguardando {pausa}s")
+                time.sleep(pausa)
+
+        else:
+            log("🌙 fora do horário comercial")
+            time.sleep(600)
+
+
 # ================= ROTAS =================
 
 @app.route("/")
@@ -376,5 +406,9 @@ def executar_manual():
 
 if __name__ == "__main__":
     log("🔥 iniciado")
+
+    # 🚀 inicia execução automática em paralelo
+    threading.Thread(target=auto_execucao, daemon=True).start()
+
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
