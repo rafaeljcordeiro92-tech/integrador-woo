@@ -157,13 +157,6 @@ def deve_bloquear(nome):
 
     return False
 
-
-# ================= HORÁRIO =================
-
-def horario_comercial():
-    agora = datetime.now()
-    return 8 <= agora.hour <= 18
-
 # ================= LOGIN =================
 
 def login():
@@ -236,7 +229,6 @@ def enviar(prod):
     if cat_sub_id:
         categorias.append({"id": cat_sub_id})
 
-    # 🔥 PAYLOAD (SEMPRE ENVIA IMAGENS)
     payload = {
         "name": prod["name"],
         "sku": prod["sku"],
@@ -248,12 +240,13 @@ def enviar(prod):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": prod["imagens"],  # 🔥 SEMPRE ENVIA
+        "images": prod["imagens"],
         "attributes": prod["atributos"]
     }
 
     try:
         if prod_id:
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
             STATUS["atualizados"] += 1
@@ -352,40 +345,11 @@ def executar():
     STATUS["rodando"] = False
     log("✅ finalizado")
 
-
-# ================= AUTO EXECUÇÃO =================
-def auto_execucao():
-    import time
-    import random
-
-    while True:
-
-        if horario_comercial():
-
-            if not STATUS["rodando"]:
-                log("🤖 execução automática (modo humano)")
-                executar()
-
-                pausa = random.randint(300, 900)  # 5 a 15 min
-                log(f"⏳ aguardando {pausa}s")
-                time.sleep(pausa)
-
-        else:
-            log("🌙 fora do horário comercial")
-            time.sleep(600)
-
-
-# ================= AUTO EXECUÇÃO =================
-
-# 🚀 AUTO START PARA RAILWAY
-threading.Thread(target=auto_execucao, daemon=True).start()
-
-
 # ================= ROTAS =================
 
 @app.route("/")
 def dashboard():
-    return send_from_directory("dashboard2", "index.html")
+    return send_from_directory("dashboard", "index.html")
 
 @app.route("/status")
 def status():
@@ -408,35 +372,9 @@ def executar_manual():
     threading.Thread(target=executar).start()
     return "ok"
 
-
-# 🛑 PARA EXECUÇÃO ATUAL (não roda novamente automaticamente)
-@app.route("/parar")
-def parar():
-    STATUS["rodando"] = False
-    log("🛑 execução atual interrompida")
-    return "ok"
-
-
-# 🛑 PARA TUDO (inclusive automático)
-@app.route("/parar_total")
-def parar_total():
-    STATUS["auto"] = False
-    STATUS["rodando"] = False
-    log("🛑 sistema pausado totalmente")
-    return "ok"
-
-
-# ▶️ VOLTA EXECUÇÃO AUTOMÁTICA
-@app.route("/iniciar_total")
-def iniciar_total():
-    STATUS["auto"] = True
-    log("▶️ sistema reativado")
-    return "ok"
-
 # ================= START =================
 
 if __name__ == "__main__":
     log("🔥 iniciado")
-
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
