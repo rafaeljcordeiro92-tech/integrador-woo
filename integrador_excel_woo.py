@@ -206,10 +206,6 @@ def baixar_imagem(url):
 
 def enviar(prod):
 
-# ================= ENVIAR =================
-
-def enviar(prod):
-
     # 🔥 FILTRO AQUI
     if deve_bloquear(prod["name"]):
         prod_woo = get_produto_woo(prod["sku"])
