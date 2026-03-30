@@ -349,7 +349,7 @@ def executar():
 
 @app.route("/")
 def dashboard():
-    return send_from_directory("dashboard", "index.html")
+    return send_from_directory("dashboard2", "index.html")
 
 @app.route("/status")
 def status():

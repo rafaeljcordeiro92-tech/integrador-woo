@@ -179,29 +179,6 @@ def get_detalhe(id, x, y):
     except:
         return None
 
-
-# ================= DOWNLOAD IMAGEM =================
-
-import tempfile
-
-def baixar_imagem(url):
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-        r = requests.get(url, headers=headers, timeout=20)
-
-        if r.status_code == 200:
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-            tmp.write(r.content)
-            tmp.close()
-            return tmp.name
-    except Exception as e:
-        log(f"❌ erro baixar imagem: {e}")
-
-    return None
-
-
 # ================= ENVIAR =================
 
 def enviar(prod):
@@ -213,13 +190,16 @@ def enviar(prod):
             deletar_produto_woo(prod_woo["id"], prod["sku"])
         log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
 
+        # ✅ PROGRESSO
         STATUS["processados"] += 1
         STATUS["fila"] = STATUS["total"] - STATUS["processados"]
 
+        # 🔥 VELOCIDADE + TEMPO RESTANTE
         tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
 
         if tempo_decorrido > 0:
             STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
+
             restante = STATUS["total"] - STATUS["processados"]
 
             if STATUS["velocidade"] > 0:
@@ -238,23 +218,7 @@ def enviar(prod):
 
     preco_novo = str(prod["price"])
     estoque_novo = int(prod["stock"])
-
-    # 🔥 DOWNLOAD DAS IMAGENS
-    imagens_upload = []
-
-    for img in prod["imagens"]:
-        url = img.get("src")
-
-        caminho = baixar_imagem(url)
-
-        if caminho:
-            imagens_upload.append({
-                "src": caminho
-            })
-        else:
-            log(f"⚠️ falha ao baixar imagem: {url}")
-
-    imagens_novas = len(imagens_upload)
+    imagens_novas = len(prod["imagens"])
 
     cat_depto_id = get_or_create_category(prod["departamento"])
     cat_sub_id = get_or_create_category(prod["categoria"])
@@ -276,28 +240,25 @@ def enviar(prod):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": imagens_upload,  # 🔥 AGORA É LOCAL
+        "images": prod["imagens"],
         "attributes": prod["atributos"]
     }
 
     try:
         if prod_id:
-            r = requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
+            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
-            if r.status_code not in [200, 201]:
-                log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
-            else:
-                STATUS["atualizados"] += 1
-                log(f"♻️ {prod['sku']} atualizado com imagens locais ({imagens_novas})")
+            STATUS["atualizados"] += 1
+
+            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
-            r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            requests.post(URL_WOO, auth=(CK, CS), json=payload)
 
-            if r.status_code not in [200, 201]:
-                log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
-            else:
-                STATUS["criados"] += 1
-                log(f"🆕 {prod['sku']} criado com imagens ({imagens_novas})")
+            STATUS["criados"] += 1
+
+            log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
     except Exception as e:
         STATUS["erros"] += 1
