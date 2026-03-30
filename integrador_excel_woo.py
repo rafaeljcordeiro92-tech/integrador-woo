@@ -435,7 +435,20 @@ def executar_manual():
 
 # ================= START =================
 
+def loop_automatico():
+    while True:
+        log("🔄 execução automática iniciando...")
+        executar()
+
+        tempo = random.randint(1800, 3600)  # 30 a 60 min
+        log(f"⏳ aguardando {tempo}s...")
+        time.sleep(tempo)
+
 if __name__ == "__main__":
     log("🔥 iniciado")
+
+    # 👇 INICIA O LOOP AUTOMÁTICO
+    threading.Thread(target=loop_automatico, daemon=True).start()
+
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
