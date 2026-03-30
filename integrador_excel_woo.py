@@ -221,11 +221,13 @@ def enviar(prod):
 
     preco_antigo = prod_woo.get("regular_price") if prod_woo else "-"
     estoque_antigo = prod_woo.get("stock_quantity") if prod_woo else "-"
-    imagens_antigas = len(prod_woo.get("images", [])) if prod_woo else 0
+    imagens_antigas_lista = prod_woo.get("images", []) if prod_woo else []
+    imagens_antigas = len(imagens_antigas_lista)
 
     preco_novo = str(prod["price"])
     estoque_novo = int(prod["stock"])
-    imagens_novas = len(prod["imagens"])
+    imagens_novas_lista = prod["imagens"]
+    imagens_novas = len(imagens_novas_lista)
 
     cat_depto_id = get_or_create_category(prod["departamento"])
     cat_sub_id = get_or_create_category(prod["categoria"])
@@ -247,13 +249,18 @@ def enviar(prod):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": prod["imagens"],
         "attributes": prod["atributos"]
     }
 
+    # 🔥 ATUALIZA IMAGENS SÓ SE MUDARAM
+    imagens_woo_urls = [img.get("src") for img in imagens_antigas_lista]
+    imagens_novas_urls = [img.get("src") for img in imagens_novas_lista]
+
+    if imagens_woo_urls != imagens_novas_urls:
+        payload["images"] = imagens_novas_lista
+
     try:
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
             requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
             STATUS["atualizados"] += 1
@@ -261,6 +268,7 @@ def enviar(prod):
             log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
+            payload["images"] = imagens_novas_lista  # novo produto sempre envia imagens
             requests.post(URL_WOO, auth=(CK, CS), json=payload)
 
             STATUS["criados"] += 1
