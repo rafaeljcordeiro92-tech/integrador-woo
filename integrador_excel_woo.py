@@ -117,6 +117,10 @@ STATUS = {
 
 LOGS = []
 
+# 🔥 ADICIONA AQUI
+LOG_ATUALIZADOS = []
+LOG_CRIADOS = []
+
 def log(msg):
     print(msg)
     LOGS.append(f"{datetime.now()} - {msg}")
@@ -246,39 +250,30 @@ def enviar(prod):
 
     try:
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            r = requests.post(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
-            STATUS["atualizados"] += 1
+            if r.status_code not in [200, 201]:
+                log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
+            else:
+                STATUS["atualizados"] += 1
+                LOG_ATUALIZADOS.append(prod["sku"])
 
-            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
+                log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
+    else:
+        r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
+
+        if r.status_code not in [200, 201]:
+            log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
         else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
-
             STATUS["criados"] += 1
+            LOG_CRIADOS.append(prod["sku"])
 
             log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
-    except Exception as e:
-        STATUS["erros"] += 1
-        log(f"❌ erro {prod['sku']} {e}")
-
-    # 🔥 PROGRESSO FINAL
-    STATUS["processados"] += 1
-    STATUS["fila"] = STATUS["total"] - STATUS["processados"]
-
-    tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
-
-    if tempo_decorrido > 0:
-        STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
-
-        restante = STATUS["total"] - STATUS["processados"]
-
-        if STATUS["velocidade"] > 0:
-            STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
-        else:
-            STATUS["tempo_restante"] = 0
+except Exception as e:
+    STATUS["erros"] += 1
+    log(f"❌ erro {prod['sku']} {e}")
 
 # ================= EXECUTAR =================
 
