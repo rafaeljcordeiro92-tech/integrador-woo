@@ -10,8 +10,6 @@ from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-iniciar_loop()  # 👈 ESSA LINHA É A CHAVE
-
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
@@ -343,70 +341,105 @@ def enviar(prod, cache):
 # ================= EXECUTAR =================
 
 def executar():
-    cache = carregar_cache()
-    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0, "inicio": datetime.now().timestamp()})
 
-    if not login():
-        STATUS["rodando"] = False
+    # 🔒 PROTEÇÃO CONTRA DUPLICAÇÃO
+    if STATUS["rodando"]:
+        log("⚠️ já está rodando, ignorando execução")
         return
 
-    r = session.get(BUSCA_URL)
-    lista = r.json().get("itens", [])
-    STATUS["total"] = len(lista)
+    cache = carregar_cache()
 
-    def processar(item):
+    STATUS.update({
+        "rodando": True,
+        "atualizados": 0,
+        "criados": 0,
+        "erros": 0,
+        "inicio": datetime.now().timestamp()
+    })
 
-        sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
-
-        detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
-        if not detalhe:
+    try:
+        if not login():
             return
 
-        id_departamento = detalhe.get("iddepartamento")
-        id_categoria = int(detalhe.get("idcategoria", 0))
+        r = session.get(BUSCA_URL)
+        lista = r.json().get("itens", [])
+        STATUS["total"] = len(lista)
 
-        departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
-        categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
+        def processar(item):
+            try:
+                sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
-        imagens = []
-        for img in detalhe.get("fotos", {}).get("imagem", []):
-            for url in img.get("grande", []):
-                imagens.append({"src": url})
+                detalhe = get_detalhe(
+                    item['idproduto'],
+                    item.get('idgradex',0),
+                    item.get('idgradey',0)
+                )
 
-        descricao_curta = detalhe.get("descricaodetalhada", "")
-        descricao_tecnica = detalhe.get("descricaotecnica", "")
+                if not detalhe:
+                    return
 
-        atributos = []
+                id_departamento = detalhe.get("iddepartamento")
+                id_categoria = int(detalhe.get("idcategoria", 0))
 
-        if detalhe.get("cor"):
-            atributos.append({"name": "Cor", "visible": True, "options": [detalhe.get("cor")]})
+                departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
+                categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
 
-        if detalhe.get("voltagem"):
-            atributos.append({"name": "Voltagem", "visible": True, "options": [detalhe.get("voltagem")]})
+                imagens = []
+                for img in detalhe.get("fotos", {}).get("imagem", []):
+                    for url in img.get("grande", []):
+                        imagens.append({"src": url})
 
-        prod = {
-            "name": detalhe.get("produto"),
-            "sku": sku,
-            "price": detalhe.get("precovenda", 0),
-            "stock": int(detalhe.get("saldo", 0)),
-            "descricao_curta": descricao_curta,
-            "descricao_tecnica": descricao_tecnica,
-            "imagens": imagens,
-            "atributos": atributos,
-            "categoria": categoria,
-            "departamento": departamento
-        }
+                descricao_curta = detalhe.get("descricaodetalhada", "")
+                descricao_tecnica = detalhe.get("descricaotecnica", "")
 
-        enviar(prod, cache)
-        time.sleep(random.uniform(0.5, 1.5))
+                atributos = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        ex.map(processar, lista)
+                if detalhe.get("cor"):
+                    atributos.append({
+                        "name": "Cor",
+                        "visible": True,
+                        "options": [detalhe.get("cor")]
+                    })
 
-    salvar_cache(cache)
+                if detalhe.get("voltagem"):
+                    atributos.append({
+                        "name": "Voltagem",
+                        "visible": True,
+                        "options": [detalhe.get("voltagem")]
+                    })
 
-    STATUS["rodando"] = False
-    log("✅ finalizado")
+                prod = {
+                    "name": detalhe.get("produto"),
+                    "sku": sku,
+                    "price": detalhe.get("precovenda", 0),
+                    "stock": int(detalhe.get("saldo", 0)),
+                    "descricao_curta": descricao_curta,
+                    "descricao_tecnica": descricao_tecnica,
+                    "imagens": imagens,
+                    "atributos": atributos,
+                    "categoria": categoria,
+                    "departamento": departamento
+                }
+
+                enviar(prod, cache)
+
+                # ⏳ delay humano
+                time.sleep(random.uniform(0.5, 1.5))
+
+            except Exception as e:
+                STATUS["erros"] += 1
+                log(f"❌ erro processar item: {e}")
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            ex.map(processar, lista)
+
+    except Exception as e:
+        log(f"❌ erro geral executar: {e}")
+
+    finally:
+        salvar_cache(cache)
+        STATUS["rodando"] = False
+        log("✅ finalizado")
 
 # ================= ROTAS =================
 
@@ -446,11 +479,24 @@ def loop_automatico():
         log(f"⏳ aguardando {tempo}s...")
         time.sleep(tempo)
 
+
+def iniciar_loop():
+    # 🔒 garante que só inicia uma vez por processo
+    if getattr(iniciar_loop, "iniciado", False):
+        return
+
+    iniciar_loop.iniciado = True
+
+    log("🚀 iniciando loop automático...")
+    threading.Thread(target=loop_automatico, daemon=True).start()
+
+
+# 👇 ESSENCIAL: inicia automaticamente no Railway (Gunicorn)
+iniciar_loop()
+
+
 if __name__ == "__main__":
     log("🔥 iniciado")
-
-    # 👇 INICIA O LOOP AUTOMÁTICO
-    threading.Thread(target=loop_automatico, daemon=True).start()
 
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
