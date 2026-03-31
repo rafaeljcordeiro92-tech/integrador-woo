@@ -229,23 +229,45 @@ def deve_bloquear(nome):
 
 def login():
     try:
-        r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
-        ok = r.json().get("status")
-        log("✅ login OK" if ok else "❌ login falhou")
-        return ok
-    except:
-        return False
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
 
-# ================= DETALHE =================
+        payload = {
+            "cpf": "00905486986",
+            "senha": "Rafael2026@",
+            "idempresa": 272
+        }
 
-def get_detalhe(id, x, y):
-    try:
-        url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
-        r = session.get(url, timeout=20)
+        r = session.post(
+            LOGIN_URL,
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+
+        log(f"📡 login status code: {r.status_code}")
+        log(f"📡 resposta login: {r.text[:200]}")
+
+        if r.status_code != 200:
+            log("❌ login falhou (status != 200)")
+            return False
+
         data = r.json()
-        return data["itens"][0] if data.get("itens") else None
-    except:
-        return None
+        ok = data.get("status")
+
+        if ok:
+            log("✅ login OK")
+            return True
+        else:
+            log("❌ login inválido (status false)")
+            return False
+
+    except Exception as e:
+        log(f"❌ erro login: {e}")
+        return False
 
 # ================= ENVIAR =================
 
