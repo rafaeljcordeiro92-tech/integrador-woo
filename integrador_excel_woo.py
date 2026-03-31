@@ -367,21 +367,6 @@ def enviar(prod, cache):
         "attributes": prod["atributos"]
     }
 
-    payload = {
-        "name": prod["name"],
-        "sku": prod["sku"],
-        "regular_price": preco_novo,
-        "stock_quantity": estoque_novo,
-        "manage_stock": True,
-        "stock_status": "instock" if estoque_novo > 0 else "outofstock",
-        "status": "publish",
-        "description": prod.get("descricao_tecnica", ""),
-        "short_description": prod.get("descricao_curta", ""),
-        "categories": categorias,
-        "images": imagens_upload,
-        "attributes": prod["atributos"]
-    }
-
     try:
         if prod_id:
             r = requests.post(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
@@ -439,6 +424,8 @@ def executar():
         r = session.get(BUSCA_URL, timeout=30)
         lista = r.json().get("itens", [])
         STATUS["total"] = len(lista)
+        STATUS["processados"] = 0
+        STATUS["fila"] = len(lista)
 
         def processar(item):
             try:
@@ -497,6 +484,17 @@ def executar():
                 }
 
                 enviar(prod, cache)
+                STATUS["processados"] += 1
+                STATUS["fila"] -= 1
+
+                tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
+
+                if tempo_execucao > 0:
+                    STATUS["velocidade"] = round(STATUS["processados"] / tempo_execucao, 2)
+
+                if STATUS["velocidade"] > 0:
+                    restante = STATUS["total"] - STATUS["processados"]
+                    STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
 
                 # ⏳ delay humano
                 time.sleep(random.uniform(0.5, 1.5))
