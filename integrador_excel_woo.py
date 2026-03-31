@@ -4,9 +4,18 @@ import os
 import json
 import time
 import random
+import urllib3
+
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, jsonify, send_from_directory
+
+# 🔒 DESATIVA WARNING DE SSL (FORNECEDOR COM CERTIFICADO VENCIDO)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 🔥 SESSÃO GLOBAL COM SSL DESATIVADO
+session = requests.Session()
+session.verify = False
 
 app = Flask(__name__)
 
@@ -46,7 +55,6 @@ WP_USER = "admin"
 WP_PASS = "UcLe k2Ir ZIdt lVJO 6wtx 2F5H"
 
 MAX_WORKERS = 2
-session = requests.Session()
 
 # ================= UPLOAD IMAGEM =================
 
