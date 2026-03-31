@@ -277,6 +277,29 @@ def login():
         log(f"❌ erro login: {e}")
         return False
 
+# ================= DETALHE =================
+
+def get_detalhe(id, x, y):
+    try:
+        url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
+
+        r = session.get(url, timeout=20)
+
+        if r.status_code != 200:
+            log(f"❌ erro detalhe status {r.status_code}")
+            return None
+
+        data = r.json()
+
+        if not data.get("itens"):
+            return None
+
+        return data["itens"][0]
+
+    except Exception as e:
+        log(f"❌ erro detalhe: {e}")
+        return None
+
 # ================= ENVIAR =================
 
 def enviar(prod, cache):
@@ -315,12 +338,34 @@ def enviar(prod, cache):
     if cat_sub_id:
         categorias.append({"id": cat_sub_id})
 
-    # 🔥 AQUI ÚNICA ALTERAÇÃO
+    # 🔥 IMAGENS
     imagens_upload = []
+
     for img in prod["imagens"]:
         url_wp = upload_imagem_wp(img["src"], prod["sku"])
         if url_wp:
             imagens_upload.append({"src": url_wp})
+
+    # 🔥 SE NÃO TIVER NENHUMA IMAGEM, USA PADRÃO
+    if not imagens_upload:
+        imagens_upload.append({
+            "src": "https://via.placeholder.com/600x600.jpg"
+        })
+
+    payload = {
+        "name": prod["name"],
+        "sku": prod["sku"],
+        "regular_price": preco_novo,
+        "stock_quantity": estoque_novo,
+        "manage_stock": True,
+        "stock_status": "instock" if estoque_novo > 0 else "outofstock",
+        "status": "publish",
+        "description": prod.get("descricao_tecnica", ""),
+        "short_description": prod.get("descricao_curta", ""),
+        "categories": categorias,
+        "images": imagens_upload,
+        "attributes": prod["atributos"]
+    }
 
     payload = {
         "name": prod["name"],
@@ -391,7 +436,7 @@ def executar():
         if not login():
             return
 
-        r = session.get(BUSCA_URL)
+        r = session.get(BUSCA_URL, timeout=30)
         lista = r.json().get("itens", [])
         STATUS["total"] = len(lista)
 
@@ -495,6 +540,9 @@ def relatorio_criados():
 
 @app.route("/executar")
 def executar_manual():
+    if STATUS["rodando"]:
+        return "já está rodando"
+
     threading.Thread(target=executar).start()
     return "ok"
 
