@@ -36,6 +36,10 @@ def salvar_cache(cache):
 def gerar_hash(prod):
     return f"{prod['price']}-{prod['stock']}-{len(prod['imagens'])}"
 
+# 🔥 NOVA FUNÇÃO (ULTRA PERFORMANCE)
+def gerar_hash_lista(item):
+    return f"{item.get('precovenda',0)}-{item.get('saldo',0)}"
+
 BASE = "https://portal.juntossomosimbativeis.com.br"
 LOGIN_URL = BASE + "/login/parceiro"
 BUSCA_URL = BASE + "/produto/getPorCodigoNome/%20/2/272"
@@ -280,25 +284,29 @@ def login():
 # ================= DETALHE =================
 
 def get_detalhe(id, x, y):
-    try:
-        url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
+    url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
 
-        r = session.get(url, timeout=20)
+    for tentativa in range(3):
+        try:
+            r = session.get(url, timeout=40)
 
-        if r.status_code != 200:
-            log(f"❌ erro detalhe status {r.status_code}")
-            return None
+            if r.status_code != 200:
+                log(f"❌ erro detalhe status {r.status_code}")
+                continue
 
-        data = r.json()
+            data = r.json()
 
-        if not data.get("itens"):
-            return None
+            if not data.get("itens"):
+                return None
 
-        return data["itens"][0]
+            return data["itens"][0]
 
-    except Exception as e:
-        log(f"❌ erro detalhe: {e}")
-        return None
+        except Exception as e:
+            log(f"⚠️ tentativa {tentativa+1} erro detalhe: {e}")
+            time.sleep(2)
+
+    log(f"❌ falhou detalhe {id}")
+    return None
 
 # ================= ENVIAR =================
 
@@ -423,13 +431,26 @@ def executar():
 
         r = session.get(BUSCA_URL, timeout=30)
         lista = r.json().get("itens", [])
+
         STATUS["total"] = len(lista)
         STATUS["processados"] = 0
         STATUS["fila"] = len(lista)
 
+        # 🔥 FUNÇÃO CORRETA DENTRO DO EXECUTAR
         def processar(item):
             try:
                 sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
+
+                # 🔥 HASH RÁPIDO
+                hash_atual = gerar_hash_lista(item)
+                hash_antigo = cache.get(sku)
+
+                if hash_antigo == hash_atual:
+                    log(f"⏭️ sem alteração: {sku}")
+
+                    STATUS["processados"] += 1
+                    STATUS["fila"] -= 1
+                    return
 
                 detalhe = get_detalhe(
                     item['idproduto'],
@@ -438,6 +459,7 @@ def executar():
                 )
 
                 if not detalhe:
+                    STATUS["erros"] += 1
                     return
 
                 id_departamento = detalhe.get("iddepartamento")
@@ -473,8 +495,8 @@ def executar():
                 prod = {
                     "name": detalhe.get("produto"),
                     "sku": sku,
-                    "price": detalhe.get("precovenda", 0),
-                    "stock": int(detalhe.get("saldo", 0)),
+                    "price": item.get("precovenda", 0),
+                    "stock": int(item.get("saldo", 0)),
                     "descricao_curta": descricao_curta,
                     "descricao_tecnica": descricao_tecnica,
                     "imagens": imagens,
@@ -484,6 +506,10 @@ def executar():
                 }
 
                 enviar(prod, cache)
+
+                # 🔥 salva hash leve
+                cache[sku] = hash_atual
+
                 STATUS["processados"] += 1
                 STATUS["fila"] -= 1
 
@@ -496,13 +522,13 @@ def executar():
                     restante = STATUS["total"] - STATUS["processados"]
                     STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
 
-                # ⏳ delay humano
-                time.sleep(random.uniform(0.5, 1.5))
+                time.sleep(random.uniform(0.3, 0.8))
 
             except Exception as e:
                 STATUS["erros"] += 1
                 log(f"❌ erro processar item: {e}")
 
+        # 🔥 THREAD POOL (FALTAVA ISSO)
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
             ex.map(processar, lista)
 

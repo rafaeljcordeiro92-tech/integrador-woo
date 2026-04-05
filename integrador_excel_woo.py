@@ -19,6 +19,9 @@ session.verify = False
 
 app = Flask(__name__)
 
+# 🔥 CACHE DE IMAGENS (ULTRA PERFORMANCE)
+CACHE_IMAGENS = {}
+
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
@@ -64,15 +67,18 @@ MAX_WORKERS = 2
 
 def upload_imagem_wp(url, sku):
 
-    for tentativa in range(3):  # 🔥 tenta até 3 vezes
+    # 🔥 SE JÁ FOI UPLOAD, USA CACHE
+    if url in CACHE_IMAGENS:
+        return CACHE_IMAGENS[url]
+
+    for tentativa in range(3):
         try:
             headers = {"User-Agent": "Mozilla/5.0"}
 
-            # 🔥 download com timeout
             r = requests.get(url, headers=headers, timeout=30)
 
             if r.status_code != 200:
-                log(f"❌ erro download imagem {url} tentativa {tentativa+1}")
+                log(f"❌ erro download imagem {url}")
                 continue
 
             nome = f"{sku}.jpg"
@@ -85,7 +91,6 @@ def upload_imagem_wp(url, sku):
                 "Content-Disposition": f"attachment; filename={nome}"
             }
 
-            # 🔥 upload com timeout
             r2 = requests.post(
                 URL_MEDIA,
                 auth=(WP_USER, WP_PASS),
@@ -95,12 +100,17 @@ def upload_imagem_wp(url, sku):
             )
 
             if r2.status_code in [200, 201]:
-                return r2.json().get("source_url")
+                url_wp = r2.json().get("source_url")
+
+                # 🔥 SALVA CACHE
+                CACHE_IMAGENS[url] = url_wp
+
+                return url_wp
             else:
-                log(f"❌ erro upload WP tentativa {tentativa+1} - {r2.text}")
+                log(f"❌ erro upload WP - {r2.text}")
 
         except Exception as e:
-            log(f"⚠️ erro tentativa {tentativa+1} upload imagem {e}")
+            log(f"⚠️ erro upload imagem {e}")
 
     return None
 
