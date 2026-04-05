@@ -431,102 +431,109 @@ def executar():
 
         r = session.get(BUSCA_URL, timeout=30)
         lista = r.json().get("itens", [])
+
         STATUS["total"] = len(lista)
         STATUS["processados"] = 0
         STATUS["fila"] = len(lista)
 
-def processar(item):
-    try:
-        sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
+        # 🔥 FUNÇÃO CORRETA DENTRO DO EXECUTAR
+        def processar(item):
+            try:
+                sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
-        # 🔥 HASH RÁPIDO (SEM DETALHE)
-        hash_atual = gerar_hash_lista(item)
-        hash_antigo = cache.get(sku)
+                # 🔥 HASH RÁPIDO
+                hash_atual = gerar_hash_lista(item)
+                hash_antigo = cache.get(sku)
 
-        # ⏭️ NÃO MUDOU → IGNORA
-        if hash_antigo == hash_atual:
-            log(f"⏭️ sem alteração: {sku}")
+                if hash_antigo == hash_atual:
+                    log(f"⏭️ sem alteração: {sku}")
 
-            STATUS["processados"] += 1
-            STATUS["fila"] -= 1
-            return
+                    STATUS["processados"] += 1
+                    STATUS["fila"] -= 1
+                    return
 
-        # 🔥 SÓ AQUI CHAMA DETALHE
-        detalhe = get_detalhe(
-            item['idproduto'],
-            item.get('idgradex',0),
-            item.get('idgradey',0)
-        )
+                detalhe = get_detalhe(
+                    item['idproduto'],
+                    item.get('idgradex',0),
+                    item.get('idgradey',0)
+                )
 
-        if not detalhe:
-            STATUS["erros"] += 1
-            return
+                if not detalhe:
+                    STATUS["erros"] += 1
+                    return
 
-        id_departamento = detalhe.get("iddepartamento")
-        id_categoria = int(detalhe.get("idcategoria", 0))
+                id_departamento = detalhe.get("iddepartamento")
+                id_categoria = int(detalhe.get("idcategoria", 0))
 
-        departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
-        categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
+                departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
+                categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
 
-        imagens = []
-        for img in detalhe.get("fotos", {}).get("imagem", []):
-            for url in img.get("grande", []):
-                imagens.append({"src": url})
+                imagens = []
+                for img in detalhe.get("fotos", {}).get("imagem", []):
+                    for url in img.get("grande", []):
+                        imagens.append({"src": url})
 
-        descricao_curta = detalhe.get("descricaodetalhada", "")
-        descricao_tecnica = detalhe.get("descricaotecnica", "")
+                descricao_curta = detalhe.get("descricaodetalhada", "")
+                descricao_tecnica = detalhe.get("descricaotecnica", "")
 
-        atributos = []
+                atributos = []
 
-        if detalhe.get("cor"):
-            atributos.append({
-                "name": "Cor",
-                "visible": True,
-                "options": [detalhe.get("cor")]
-            })
+                if detalhe.get("cor"):
+                    atributos.append({
+                        "name": "Cor",
+                        "visible": True,
+                        "options": [detalhe.get("cor")]
+                    })
 
-        if detalhe.get("voltagem"):
-            atributos.append({
-                "name": "Voltagem",
-                "visible": True,
-                "options": [detalhe.get("voltagem")]
-            })
+                if detalhe.get("voltagem"):
+                    atributos.append({
+                        "name": "Voltagem",
+                        "visible": True,
+                        "options": [detalhe.get("voltagem")]
+                    })
 
-        prod = {
-            "name": detalhe.get("produto"),
-            "sku": sku,
-            "price": item.get("precovenda", 0),
-            "stock": int(item.get("saldo", 0)),
-            "descricao_curta": descricao_curta,
-            "descricao_tecnica": descricao_tecnica,
-            "imagens": imagens,
-            "atributos": atributos,
-            "categoria": categoria,
-            "departamento": departamento
-        }
+                prod = {
+                    "name": detalhe.get("produto"),
+                    "sku": sku,
+                    "price": item.get("precovenda", 0),
+                    "stock": int(item.get("saldo", 0)),
+                    "descricao_curta": descricao_curta,
+                    "descricao_tecnica": descricao_tecnica,
+                    "imagens": imagens,
+                    "atributos": atributos,
+                    "categoria": categoria,
+                    "departamento": departamento
+                }
 
-        enviar(prod, cache)
+                enviar(prod, cache)
 
-        # 🔥 salva hash leve
-        cache[sku] = hash_atual
+                # 🔥 salva hash leve
+                cache[sku] = hash_atual
 
-        STATUS["processados"] += 1
-        STATUS["fila"] -= 1
+                STATUS["processados"] += 1
+                STATUS["fila"] -= 1
 
-        tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
+                tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
 
-        if tempo_execucao > 0:
-            STATUS["velocidade"] = round(STATUS["processados"] / tempo_execucao, 2)
+                if tempo_execucao > 0:
+                    STATUS["velocidade"] = round(STATUS["processados"] / tempo_execucao, 2)
 
-        if STATUS["velocidade"] > 0:
-            restante = STATUS["total"] - STATUS["processados"]
-            STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
+                if STATUS["velocidade"] > 0:
+                    restante = STATUS["total"] - STATUS["processados"]
+                    STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
 
-        time.sleep(random.uniform(0.3, 0.8))
+                time.sleep(random.uniform(0.3, 0.8))
+
+            except Exception as e:
+                STATUS["erros"] += 1
+                log(f"❌ erro processar item: {e}")
+
+        # 🔥 THREAD POOL (FALTAVA ISSO)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            ex.map(processar, lista)
 
     except Exception as e:
-        STATUS["erros"] += 1
-        log(f"❌ erro processar item: {e}")
+        log(f"❌ erro geral executar: {e}")
 
     finally:
         salvar_cache(cache)
