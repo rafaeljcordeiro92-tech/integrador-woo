@@ -435,7 +435,7 @@ def executar():
         STATUS["processados"] = 0
         STATUS["fila"] = len(lista)
 
-        def processar(item):
+def processar(item):
     try:
         sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
@@ -507,7 +507,7 @@ def executar():
 
         enviar(prod, cache)
 
-        # 🔥 salva hash leve (performance)
+        # 🔥 salva hash leve
         cache[sku] = hash_atual
 
         STATUS["processados"] += 1
