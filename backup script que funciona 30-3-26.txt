@@ -1,13 +1,40 @@
 import requests
 import threading
 import os
+import json
+import time
+import random
+import urllib3
+
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, jsonify, send_from_directory
 
+# 🔒 DESATIVA WARNING DE SSL (FORNECEDOR COM CERTIFICADO VENCIDO)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 🔥 SESSÃO GLOBAL COM SSL DESATIVADO
+session = requests.Session()
+session.verify = False
+
 app = Flask(__name__)
 
 # ================= CONFIG =================
+
+CACHE_FILE = "cache_produtos.json"
+
+def carregar_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def salvar_cache(cache):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f)
+
+def gerar_hash(prod):
+    return f"{prod['price']}-{prod['stock']}-{len(prod['imagens'])}"
 
 BASE = "https://portal.juntossomosimbativeis.com.br"
 LOGIN_URL = BASE + "/login/parceiro"
@@ -19,12 +46,59 @@ SENHA = "Rafael2026@"
 
 URL_WOO = "https://moveisdolar.com.br/wp-json/wc/v3/products"
 URL_WOO_CAT = "https://moveisdolar.com.br/wp-json/wc/v3/products/categories"
+URL_MEDIA = "https://moveisdolar.com.br/wp-json/wp/v2/media"  # 🔥 ADICIONADO
 
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
+WP_USER = "admin"
+WP_PASS = "UcLe k2Ir ZIdt lVJO 6wtx 2F5H"
+
 MAX_WORKERS = 2
-session = requests.Session()
+
+# ================= UPLOAD IMAGEM =================
+
+def upload_imagem_wp(url, sku):
+
+    for tentativa in range(3):  # 🔥 tenta até 3 vezes
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+
+            # 🔥 download com timeout
+            r = requests.get(url, headers=headers, timeout=30)
+
+            if r.status_code != 200:
+                log(f"❌ erro download imagem {url} tentativa {tentativa+1}")
+                continue
+
+            nome = f"{sku}.jpg"
+
+            files = {
+                "file": (nome, r.content, "image/jpeg")
+            }
+
+            headers_upload = {
+                "Content-Disposition": f"attachment; filename={nome}"
+            }
+
+            # 🔥 upload com timeout
+            r2 = requests.post(
+                URL_MEDIA,
+                auth=(WP_USER, WP_PASS),
+                headers=headers_upload,
+                files=files,
+                timeout=30
+            )
+
+            if r2.status_code in [200, 201]:
+                return r2.json().get("source_url")
+            else:
+                log(f"❌ erro upload WP tentativa {tentativa+1} - {r2.text}")
+
+        except Exception as e:
+            log(f"⚠️ erro tentativa {tentativa+1} upload imagem {e}")
+
+    return None
 
 # ================= MAPAS =================
 
@@ -105,17 +179,19 @@ def get_or_create_category(nome):
 STATUS = {
     "rodando": False,
     "total": 0,
-    "processados": 0,   # 👈 ADICIONADO
+    "processados": 0,
     "atualizados": 0,
     "criados": 0,
     "erros": 0,
-    "fila": 0,           # 👈 ADICIONADO
-    "inicio": None,        # 👈 NOVO
-    "velocidade": 0,       # 👈 NOVO
-    "tempo_restante": 0    # 👈 NOVO
+    "fila": 0,
+    "inicio": None,
+    "velocidade": 0,
+    "tempo_restante": 0
 }
 
 LOGS = []
+LOG_ATUALIZADOS = []
+LOG_CRIADOS = []
 
 def log(msg):
     print(msg)
@@ -161,11 +237,44 @@ def deve_bloquear(nome):
 
 def login():
     try:
-        r = session.post(LOGIN_URL, json={"cpf": USUARIO, "senha": SENHA, "idempresa": EMPRESA})
-        ok = r.json().get("status")
-        log("✅ login OK" if ok else "❌ login falhou")
-        return ok
-    except:
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+
+        payload = {
+            "cpf": "00905486986",
+            "senha": "Rafael2026@",
+            "idempresa": 272
+        }
+
+        r = session.post(
+            LOGIN_URL,
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+
+        log(f"📡 login status code: {r.status_code}")
+        log(f"📡 resposta login: {r.text[:200]}")
+
+        if r.status_code != 200:
+            log("❌ login falhou (status != 200)")
+            return False
+
+        data = r.json()
+        ok = data.get("status")
+
+        if ok:
+            log("✅ login OK")
+            return True
+        else:
+            log("❌ login inválido (status false)")
+            return False
+
+    except Exception as e:
+        log(f"❌ erro login: {e}")
         return False
 
 # ================= DETALHE =================
@@ -173,40 +282,40 @@ def login():
 def get_detalhe(id, x, y):
     try:
         url = f"{BASE}/produto/detalhe/{EMPRESA}/{id}/{x}/{y}"
+
         r = session.get(url, timeout=20)
+
+        if r.status_code != 200:
+            log(f"❌ erro detalhe status {r.status_code}")
+            return None
+
         data = r.json()
-        return data["itens"][0] if data.get("itens") else None
-    except:
+
+        if not data.get("itens"):
+            return None
+
+        return data["itens"][0]
+
+    except Exception as e:
+        log(f"❌ erro detalhe: {e}")
         return None
 
 # ================= ENVIAR =================
 
-def enviar(prod):
+def enviar(prod, cache):
 
-    # 🔥 FILTRO AQUI
+    hash_atual = gerar_hash(prod)
+    hash_antigo = cache.get(prod["sku"])
+
+    if hash_antigo == hash_atual:
+        log(f"⏭️ sem alteração: {prod['sku']}")
+        return
+
     if deve_bloquear(prod["name"]):
         prod_woo = get_produto_woo(prod["sku"])
         if prod_woo:
             deletar_produto_woo(prod_woo["id"], prod["sku"])
         log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
-
-        # ✅ PROGRESSO
-        STATUS["processados"] += 1
-        STATUS["fila"] = STATUS["total"] - STATUS["processados"]
-
-        # 🔥 VELOCIDADE + TEMPO RESTANTE
-        tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
-
-        if tempo_decorrido > 0:
-            STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
-
-            restante = STATUS["total"] - STATUS["processados"]
-
-            if STATUS["velocidade"] > 0:
-                STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
-            else:
-                STATUS["tempo_restante"] = 0
-
         return
 
     prod_woo = get_produto_woo(prod["sku"])
@@ -229,6 +338,20 @@ def enviar(prod):
     if cat_sub_id:
         categorias.append({"id": cat_sub_id})
 
+    # 🔥 IMAGENS
+    imagens_upload = []
+
+    for img in prod["imagens"]:
+        url_wp = upload_imagem_wp(img["src"], prod["sku"])
+        if url_wp:
+            imagens_upload.append({"src": url_wp})
+
+    # 🔥 SE NÃO TIVER NENHUMA IMAGEM, USA PADRÃO
+    if not imagens_upload:
+        imagens_upload.append({
+            "src": "https://via.placeholder.com/600x600.jpg"
+        })
+
     payload = {
         "name": prod["name"],
         "sku": prod["sku"],
@@ -240,110 +363,156 @@ def enviar(prod):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": prod["imagens"],
+        "images": imagens_upload,
         "attributes": prod["atributos"]
     }
 
     try:
         if prod_id:
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json={"images": []})
-            requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            r = requests.post(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
-            STATUS["atualizados"] += 1
+            if r.status_code not in [200, 201]:
+                log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
+            else:
+                STATUS["atualizados"] += 1
+                LOG_ATUALIZADOS.append(prod["sku"])
 
-            log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
+                log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
-            requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
 
-            STATUS["criados"] += 1
+            if r.status_code not in [200, 201]:
+                log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
+            else:
+                STATUS["criados"] += 1
+                LOG_CRIADOS.append(prod["sku"])
 
-            log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
+                log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
+
+        # 👇 MESMO NÍVEL DO IF/ELSE
+        cache[prod["sku"]] = hash_atual
 
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
-    # 🔥 PROGRESSO FINAL
-    STATUS["processados"] += 1
-    STATUS["fila"] = STATUS["total"] - STATUS["processados"]
-
-    tempo_decorrido = datetime.now().timestamp() - STATUS["inicio"]
-
-    if tempo_decorrido > 0:
-        STATUS["velocidade"] = round(STATUS["processados"] / tempo_decorrido, 2)
-
-        restante = STATUS["total"] - STATUS["processados"]
-
-        if STATUS["velocidade"] > 0:
-            STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
-        else:
-            STATUS["tempo_restante"] = 0
 
 # ================= EXECUTAR =================
 
 def executar():
-    STATUS.update({"rodando": True, "atualizados": 0, "criados": 0, "erros": 0,        "inicio": datetime.now().timestamp()
-})
 
-    if not login():
-        STATUS["rodando"] = False
+    # 🔒 PROTEÇÃO CONTRA DUPLICAÇÃO
+    if STATUS["rodando"]:
+        log("⚠️ já está rodando, ignorando execução")
         return
 
-    r = session.get(BUSCA_URL)
-    lista = r.json().get("itens", [])
-    STATUS["total"] = len(lista)
+    cache = carregar_cache()
 
-    def processar(item):
+    STATUS.update({
+        "rodando": True,
+        "atualizados": 0,
+        "criados": 0,
+        "erros": 0,
+        "inicio": datetime.now().timestamp()
+    })
 
-        sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
-
-        detalhe = get_detalhe(item['idproduto'], item.get('idgradex',0), item.get('idgradey',0))
-        if not detalhe:
+    try:
+        if not login():
             return
 
-        id_departamento = detalhe.get("iddepartamento")
-        id_categoria = int(detalhe.get("idcategoria", 0))
+        r = session.get(BUSCA_URL, timeout=30)
+        lista = r.json().get("itens", [])
+        STATUS["total"] = len(lista)
+        STATUS["processados"] = 0
+        STATUS["fila"] = len(lista)
 
-        departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
-        categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
+        def processar(item):
+            try:
+                sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
-        imagens = []
-        for img in detalhe.get("fotos", {}).get("imagem", []):
-            for url in img.get("grande", []):
-                imagens.append({"src": url})
+                detalhe = get_detalhe(
+                    item['idproduto'],
+                    item.get('idgradex',0),
+                    item.get('idgradey',0)
+                )
 
-        descricao_curta = detalhe.get("descricaodetalhada", "")
-        descricao_tecnica = detalhe.get("descricaotecnica", "")
+                if not detalhe:
+                    return
 
-        atributos = []
+                id_departamento = detalhe.get("iddepartamento")
+                id_categoria = int(detalhe.get("idcategoria", 0))
 
-        if detalhe.get("cor"):
-            atributos.append({"name": "Cor", "visible": True, "options": [detalhe.get("cor")]})
+                departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
+                categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
 
-        if detalhe.get("voltagem"):
-            atributos.append({"name": "Voltagem", "visible": True, "options": [detalhe.get("voltagem")]})
+                imagens = []
+                for img in detalhe.get("fotos", {}).get("imagem", []):
+                    for url in img.get("grande", []):
+                        imagens.append({"src": url})
 
-        prod = {
-            "name": detalhe.get("produto"),
-            "sku": sku,
-            "price": detalhe.get("precovenda", 0),
-            "stock": int(detalhe.get("saldo", 0)),
-            "descricao_curta": descricao_curta,
-            "descricao_tecnica": descricao_tecnica,
-            "imagens": imagens,
-            "atributos": atributos,
-            "categoria": categoria,
-            "departamento": departamento
-        }
+                descricao_curta = detalhe.get("descricaodetalhada", "")
+                descricao_tecnica = detalhe.get("descricaotecnica", "")
 
-        enviar(prod)
+                atributos = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        ex.map(processar, lista)
+                if detalhe.get("cor"):
+                    atributos.append({
+                        "name": "Cor",
+                        "visible": True,
+                        "options": [detalhe.get("cor")]
+                    })
 
-    STATUS["rodando"] = False
-    log("✅ finalizado")
+                if detalhe.get("voltagem"):
+                    atributos.append({
+                        "name": "Voltagem",
+                        "visible": True,
+                        "options": [detalhe.get("voltagem")]
+                    })
+
+                prod = {
+                    "name": detalhe.get("produto"),
+                    "sku": sku,
+                    "price": detalhe.get("precovenda", 0),
+                    "stock": int(detalhe.get("saldo", 0)),
+                    "descricao_curta": descricao_curta,
+                    "descricao_tecnica": descricao_tecnica,
+                    "imagens": imagens,
+                    "atributos": atributos,
+                    "categoria": categoria,
+                    "departamento": departamento
+                }
+
+                enviar(prod, cache)
+                STATUS["processados"] += 1
+                STATUS["fila"] -= 1
+
+                tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
+
+                if tempo_execucao > 0:
+                    STATUS["velocidade"] = round(STATUS["processados"] / tempo_execucao, 2)
+
+                if STATUS["velocidade"] > 0:
+                    restante = STATUS["total"] - STATUS["processados"]
+                    STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
+
+                # ⏳ delay humano
+                time.sleep(random.uniform(0.5, 1.5))
+
+            except Exception as e:
+                STATUS["erros"] += 1
+                log(f"❌ erro processar item: {e}")
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            ex.map(processar, lista)
+
+    except Exception as e:
+        log(f"❌ erro geral executar: {e}")
+
+    finally:
+        salvar_cache(cache)
+        STATUS["rodando"] = False
+        log("✅ finalizado")
 
 # ================= ROTAS =================
 
@@ -369,12 +538,41 @@ def relatorio_criados():
 
 @app.route("/executar")
 def executar_manual():
+    if STATUS["rodando"]:
+        return "já está rodando"
+
     threading.Thread(target=executar).start()
     return "ok"
 
 # ================= START =================
 
+def loop_automatico():
+    while True:
+        log("🔄 execução automática iniciando...")
+        executar()
+
+        tempo = random.randint(1800, 3600)  # 30 a 60 min
+        log(f"⏳ aguardando {tempo}s...")
+        time.sleep(tempo)
+
+
+def iniciar_loop():
+    # 🔒 garante que só inicia uma vez por processo
+    if getattr(iniciar_loop, "iniciado", False):
+        return
+
+    iniciar_loop.iniciado = True
+
+    log("🚀 iniciando loop automático...")
+    threading.Thread(target=loop_automatico, daemon=True).start()
+
+
+# 👇 ESSENCIAL: inicia automaticamente no Railway (Gunicorn)
+iniciar_loop()
+
+
 if __name__ == "__main__":
     log("🔥 iniciado")
+
     PORT = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=PORT)
