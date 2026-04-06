@@ -61,7 +61,7 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 WP_USER = "admin"
 WP_PASS = "UcLe k2Ir ZIdt lVJO 6wtx 2F5H"
 
-MAX_WORKERS = 2
+MAX_WORKERS = 8
 
 # ================= UPLOAD IMAGEM =================
 
@@ -356,19 +356,23 @@ def enviar(prod, cache):
     if cat_sub_id:
         categorias.append({"id": cat_sub_id})
 
-    # 🔥 IMAGENS
-    imagens_upload = []
+    # 🔥 IMAGENS (ULTRA OTIMIZADO)
+    if prod_woo:
+        # 👉 produto já existe → NÃO reenvia imagem
+        imagens_upload = []
+    else:
+        imagens_upload = []
 
-    for img in prod["imagens"]:
-        url_wp = upload_imagem_wp(img["src"], prod["sku"])
-        if url_wp:
-            imagens_upload.append({"src": url_wp})
+        for img in prod["imagens"]:
+            url_wp = upload_imagem_wp(img["src"], prod["sku"])
+            if url_wp:
+                imagens_upload.append({"src": url_wp})
 
-    # 🔥 SE NÃO TIVER NENHUMA IMAGEM, USA PADRÃO
-    if not imagens_upload:
-        imagens_upload.append({
-            "src": "https://via.placeholder.com/600x600.jpg"
-        })
+        # 🔥 fallback
+        if not imagens_upload:
+            imagens_upload.append({
+                "src": "https://via.placeholder.com/600x600.jpg"
+            })
 
     payload = {
         "name": prod["name"],
@@ -408,13 +412,15 @@ def enviar(prod, cache):
 
                 log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
-        # 👇 MESMO NÍVEL DO IF/ELSE
+        # 🔥 salva cache
         cache[prod["sku"]] = hash_atual
 
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
 
+
+# ================= EXECUTAR =================
 
 # ================= EXECUTAR =================
 
@@ -457,11 +463,30 @@ def executar():
 
                 if hash_antigo == hash_atual:
                     log(f"⏭️ sem alteração: {sku}")
-
-                    STATUS["processados"] += 1
-                    STATUS["fila"] -= 1
                     return
 
+                # 🔥 ULTRA SPEED (SEM DETALHE)
+                prod_woo = get_produto_woo(sku)
+
+                if prod_woo:
+                    prod = {
+                        "name": prod_woo.get("name"),
+                        "sku": sku,
+                        "price": item.get("precovenda", 0),
+                        "stock": int(item.get("saldo", 0)),
+                        "descricao_curta": prod_woo.get("short_description", ""),
+                        "descricao_tecnica": prod_woo.get("description", ""),
+                        "imagens": [],
+                        "atributos": [],
+                        "categoria": "",
+                        "departamento": ""
+                    }
+
+                    enviar(prod, cache)
+                    cache[sku] = hash_atual
+                    return
+
+                # 🔥 NOVO PRODUTO → DETALHE COMPLETO
                 detalhe = get_detalhe(
                     item['idproduto'],
                     item.get('idgradex',0),
@@ -517,11 +542,8 @@ def executar():
 
                 enviar(prod, cache)
 
-                # 🔥 salva hash leve
+                # 🔥 salva hash
                 cache[sku] = hash_atual
-
-                STATUS["processados"] += 1
-                STATUS["fila"] -= 1
 
                 tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
 
@@ -532,13 +554,18 @@ def executar():
                     restante = STATUS["total"] - STATUS["processados"]
                     STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
 
-                time.sleep(random.uniform(0.3, 0.8))
+                time.sleep(random.uniform(0.1, 0.3))
 
             except Exception as e:
                 STATUS["erros"] += 1
                 log(f"❌ erro processar item: {e}")
 
-        # 🔥 THREAD POOL (FALTAVA ISSO)
+            finally:
+                # 🔥 GARANTE QUE NUNCA TRAVA EM 99%
+                STATUS["processados"] += 1
+                STATUS["fila"] -= 1
+
+        # 🔥 THREAD POOL
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
             ex.map(processar, lista)
 
