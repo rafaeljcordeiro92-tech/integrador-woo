@@ -96,7 +96,6 @@ def upload_imagem_wp(url, sku):
 
             headers_upload = {
                 "Content-Disposition": f"attachment; filename={nome}",
-                "Content-Type": "image/jpeg"
             }
 
             r2 = requests.post(
@@ -375,7 +374,7 @@ def enviar(prod, cache):
     # 🔥 SE NÃO TIVER NENHUMA IMAGEM, USA PADRÃO
     if not imagens_upload:
         imagens_upload.append({
-            "src": "https://via.placeholder.com/600x600.jpg"
+            "src": "https://moveisdolar.com.br/wp-content/uploads/2026/04/Sem-imagem-disponivel.png"
         })
 
     payload = {
