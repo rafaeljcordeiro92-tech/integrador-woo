@@ -1,6 +1,7 @@
 import requests
 import threading
 import os
+import base64
 import json
 import time
 import random
@@ -65,8 +66,21 @@ URL_MEDIA = "https://moveisdolar.com.br/wp-json/wp/v2/media"  # 🔥 ADICIONADO
 CK = "ck_6c160463d72b37d1783ef97b09d19e6eefcc2293"
 CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 
+def get_auth_headers():
+    token = base64.b64encode(f"{CK}:{CS}".encode()).decode()
+    return {
+        "Authorization": f"Basic {token}",
+        "Content-Type": "application/json"
+    }
+
 WP_USER = "admin"
 WP_PASS = "UcLe k2Ir ZIdt lVJO 6wtx 2F5H"
+
+def get_wp_headers():
+    token = base64.b64encode(f"{WP_USER}:{WP_PASS}".encode()).decode()
+    return {
+        "Authorization": f"Basic {token}"
+    }
 
 MAX_WORKERS = 4
 
@@ -100,14 +114,18 @@ def upload_imagem_wp(url, sku):
 
             r2 = requests.post(
                 URL_MEDIA,
-                auth=(WP_USER, WP_PASS),
-                headers=headers_upload,
+                headers={**get_wp_headers(), **headers_upload},
                 files=files,
                 timeout=30
             )
 
             if r2.status_code in [200, 201]:
-                url_wp = r2.json().get("source_url")
+
+                try:
+                    url_wp = r2.json().get("source_url")
+                except:
+                    log(f"❌ erro JSON upload WP: {r2.text[:200]}")
+                    continue
 
                 # 🔥 SALVA CACHE
                 CACHE_IMAGENS[url] = url_wp
@@ -177,16 +195,46 @@ def get_or_create_category(nome):
         return CACHE_CATEGORIAS[nome]
 
     try:
-        r = requests.get(URL_WOO_CAT, auth=(CK, CS), params={"search": nome})
-        data = r.json()
+        # 🔥 GET categoria
+        r = requests.get(
+            URL_WOO_CAT,
+            headers=get_auth_headers(),
+            params={"search": nome}
+        )
 
+        if r.status_code != 200:
+            log(f"❌ erro categoria {nome} - status {r.status_code} - {r.text[:100]}")
+            return None
+
+        # 🔒 proteção JSON
+        try:
+            data = r.json()
+        except:
+            log(f"❌ resposta não JSON categoria {nome}: {r.text[:200]}")
+            return None
+
+        # 🔍 verifica se já existe
         for cat in data:
             if cat["name"].lower() == nome.lower():
                 CACHE_CATEGORIAS[nome] = cat["id"]
                 return cat["id"]
 
-        r = requests.post(URL_WOO_CAT, auth=(CK, CS), json={"name": nome})
-        cat_id = r.json()["id"]
+        # 🔥 cria categoria
+        r = requests.post(
+            URL_WOO_CAT,
+            headers=get_auth_headers(),
+            json={"name": nome}
+        )
+
+        if r.status_code not in [200, 201]:
+            log(f"❌ erro criar categoria {nome} - {r.status_code} - {r.text[:100]}")
+            return None
+
+        try:
+            cat_id = r.json()["id"]
+        except:
+            log(f"❌ erro JSON ao criar categoria {nome}: {r.text[:200]}")
+            return None
 
         CACHE_CATEGORIAS[nome] = cat_id
         return cat_id
@@ -224,16 +272,41 @@ def log(msg):
 
 def get_produto_woo(sku):
     try:
-        r = requests.get(URL_WOO, auth=(CK, CS), params={"sku": sku})
-        data = r.json()
+        r = requests.get(
+            URL_WOO,
+            headers=get_auth_headers(),
+            params={"sku": sku}
+        )
+
+        if r.status_code != 200:
+            log(f"❌ erro buscar produto {sku} - {r.status_code} - {r.text[:100]}")
+            return None
+
+        try:
+            data = r.json()
+        except:
+            log(f"❌ resposta inválida produto: {r.text[:200]}")
+            return None
+
         return data[0] if data else None
-    except:
+
+    except Exception as e:
+        log(f"❌ erro get produto {sku}: {e}")
         return None
 
 def deletar_produto_woo(prod_id, sku):
     try:
-        requests.delete(f"{URL_WOO}/{prod_id}", auth=(CK, CS), params={"force": True})
-        log(f"🗑️ removido do Woo: {sku}")
+        r = requests.delete(
+            f"{URL_WOO}/{prod_id}",
+            headers=get_auth_headers(),
+            params={"force": True}
+        )
+
+        if r.status_code not in [200, 204]:
+            log(f"❌ erro deletar {sku} - {r.status_code} - {r.text[:100]}")
+        else:
+            log(f"🗑️ removido do Woo: {sku}")
+
     except Exception as e:
         log(f"❌ erro ao deletar {sku}: {e}")
 
@@ -284,7 +357,13 @@ def login():
             log("❌ login falhou (status != 200)")
             return False
 
-        data = r.json()
+        # 🔒 BLINDAGEM JSON
+        try:
+            data = r.json()
+        except:
+            log(f"❌ resposta inválida login: {r.text[:200]}")
+            return False
+
         ok = data.get("status")
 
         if ok:
@@ -311,7 +390,12 @@ def get_detalhe(id, x, y):
                 log(f"❌ erro detalhe status {r.status_code}")
                 continue
 
-            data = r.json()
+            # 🔒 BLINDAGEM JSON
+            try:
+                data = r.json()
+            except:
+                log(f"❌ resposta inválida detalhe: {r.text[:200]}")
+                return None
 
             if not data.get("itens"):
                 return None
@@ -394,7 +478,7 @@ def enviar(prod, cache):
 
     try:
         if prod_id:
-            r = requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            r = requests.put(f"{URL_WOO}/{prod_id}", headers=get_auth_headers(), json=payload)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
@@ -405,7 +489,7 @@ def enviar(prod, cache):
                 log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
-            r = requests.post(URL_WOO, auth=(CK, CS), json=payload)
+            r = requests.post(URL_WOO, headers=get_auth_headers(), json=payload)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
@@ -453,7 +537,20 @@ def executar():
             return
 
         r = session.get(BUSCA_URL, timeout=30)
-        lista = r.json().get("itens", [])
+
+        # 👇 COLE AQUI 👇
+        if r.status_code != 200:
+            log(f"❌ erro buscar lista - {r.status_code} - {r.text[:100]}")
+            return
+
+        # 🔒 BLINDAGEM JSON
+        try:
+            data = r.json()
+        except:
+            log(f"❌ resposta inválida lista: {r.text[:200]}")
+            return
+
+        lista = data.get("itens", [])
 
         STATUS["total"] = len(lista)
         STATUS["processados"] = 0
@@ -514,7 +611,7 @@ def executar():
                         "options": [detalhe.get("voltagem")]
                     })
 
-                # 🔥 PREÇO COM REGRA DE DATA (GABARITO)
+                # 🔥 PREÇO COM REGRA DE DATA
                 preco = float(item.get("precovenda", 0))
 
                 if item.get("gabarito"):
@@ -573,7 +670,7 @@ def executar():
                 STATUS["processados"] += 1
                 STATUS["fila"] -= 1
 
-        # 🔥 THREAD POOL COM CONTROLE DE PARAR
+        # 🔥 THREAD POOL
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
             futures = []
 
