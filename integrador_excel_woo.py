@@ -95,7 +95,7 @@ def upload_imagem_wp(url, sku):
             }
 
             headers_upload = {
-                "Content-Disposition": f"attachment; filename={nome}"
+                "Content-Disposition": f"attachment; filename={nome}",
                 "Content-Type": "image/jpeg"
             }
 
