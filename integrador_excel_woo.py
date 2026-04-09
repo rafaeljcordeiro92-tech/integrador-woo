@@ -25,6 +25,10 @@ CACHE_IMAGENS = {}
 # 🛑 CONTROLE GLOBAL DE PARADA
 PARAR = False
 
+# 📦 FILA DE ENVIO EM LOTE (BATCH)
+FILA_BATCH = []
+BATCH_SIZE = 10
+
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
@@ -92,6 +96,7 @@ def upload_imagem_wp(url, sku):
 
             headers_upload = {
                 "Content-Disposition": f"attachment; filename={nome}"
+                "Content-Type": "image/jpeg"
             }
 
             r2 = requests.post(
@@ -390,7 +395,7 @@ def enviar(prod, cache):
 
     try:
         if prod_id:
-            r = requests.post(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
+            r = requests.put(f"{URL_WOO}/{prod_id}", auth=(CK, CS), json=payload)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")

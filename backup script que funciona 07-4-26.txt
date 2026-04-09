@@ -22,6 +22,13 @@ app = Flask(__name__)
 # 🔥 CACHE DE IMAGENS (ULTRA PERFORMANCE)
 CACHE_IMAGENS = {}
 
+# 🛑 CONTROLE GLOBAL DE PARADA
+PARAR = False
+
+# 📦 FILA DE ENVIO EM LOTE (BATCH)
+FILA_BATCH = []
+BATCH_SIZE = 10
+
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
@@ -61,7 +68,7 @@ CS = "cs_a9b7cee49457d1a7839ab2c83a4d1dd9ccee8f0f"
 WP_USER = "admin"
 WP_PASS = "UcLe k2Ir ZIdt lVJO 6wtx 2F5H"
 
-MAX_WORKERS = 2
+MAX_WORKERS = 4
 
 # ================= UPLOAD IMAGEM =================
 
@@ -347,8 +354,8 @@ def enviar(prod, cache):
     estoque_novo = int(prod["stock"])
     imagens_novas = len(prod["imagens"])
 
-    cat_depto_id = get_or_create_category(prod["departamento"])
-    cat_sub_id = get_or_create_category(prod["categoria"])
+    cat_depto_id = get_or_create_category(prod["departamento"]) if prod["departamento"] else None
+    cat_sub_id = get_or_create_category(prod["categoria"]) if prod["categoria"] else None
 
     categorias = []
     if cat_depto_id:
@@ -420,6 +427,12 @@ def enviar(prod, cache):
 
 def executar():
 
+    global PARAR
+
+    if PARAR:
+        log("🛑 execução bloqueada (PARAR ativo)")
+        return
+
     # 🔒 PROTEÇÃO CONTRA DUPLICAÇÃO
     if STATUS["rodando"]:
         log("⚠️ já está rodando, ignorando execução")
@@ -446,9 +459,11 @@ def executar():
         STATUS["processados"] = 0
         STATUS["fila"] = len(lista)
 
-        # 🔥 FUNÇÃO CORRETA DENTRO DO EXECUTAR
         def processar(item):
             try:
+                if PARAR:
+                    return
+
                 sku = f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
 
                 # 🔥 HASH RÁPIDO
@@ -457,9 +472,6 @@ def executar():
 
                 if hash_antigo == hash_atual:
                     log(f"⏭️ sem alteração: {sku}")
-
-                    STATUS["processados"] += 1
-                    STATUS["fila"] -= 1
                     return
 
                 detalhe = get_detalhe(
@@ -502,10 +514,33 @@ def executar():
                         "options": [detalhe.get("voltagem")]
                     })
 
+                # 🔥 PREÇO COM REGRA DE DATA (GABARITO)
+                preco = float(item.get("precovenda", 0))
+
+                if item.get("gabarito"):
+
+                    data_ini = item.get("datainicial_gabarito")
+                    data_fim = item.get("datafinal_gabarito")
+
+                    try:
+                        hoje = datetime.now().date()
+
+                        if data_ini and data_fim:
+                            data_ini = datetime.strptime(data_ini, "%d/%m/%Y").date()
+                            data_fim = datetime.strptime(data_fim, "%d/%m/%Y").date()
+
+                            if data_ini <= hoje <= data_fim:
+                                preco = round(preco * 1.3, 2)
+                        else:
+                            preco = round(preco * 1.3, 2)
+
+                    except:
+                        preco = round(preco * 1.3, 2)
+
                 prod = {
                     "name": detalhe.get("produto"),
                     "sku": sku,
-                    "price": item.get("precovenda", 0),
+                    "price": preco,
                     "stock": int(item.get("saldo", 0)),
                     "descricao_curta": descricao_curta,
                     "descricao_tecnica": descricao_tecnica,
@@ -517,11 +552,7 @@ def executar():
 
                 enviar(prod, cache)
 
-                # 🔥 salva hash leve
                 cache[sku] = hash_atual
-
-                STATUS["processados"] += 1
-                STATUS["fila"] -= 1
 
                 tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
 
@@ -532,15 +563,30 @@ def executar():
                     restante = STATUS["total"] - STATUS["processados"]
                     STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
 
-                time.sleep(random.uniform(0.3, 0.8))
+                time.sleep(random.uniform(0.1, 0.3))
 
             except Exception as e:
                 STATUS["erros"] += 1
                 log(f"❌ erro processar item: {e}")
 
-        # 🔥 THREAD POOL (FALTAVA ISSO)
+            finally:
+                STATUS["processados"] += 1
+                STATUS["fila"] -= 1
+
+        # 🔥 THREAD POOL COM CONTROLE DE PARAR
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-            ex.map(processar, lista)
+            futures = []
+
+            for item in lista:
+                if PARAR:
+                    log("🛑 execução interrompida pelo usuário")
+                    break
+                futures.append(ex.submit(processar, item))
+
+            for f in futures:
+                if PARAR:
+                    break
+                f.result()
 
     except Exception as e:
         log(f"❌ erro geral executar: {e}")
@@ -556,38 +602,89 @@ def executar():
 def dashboard():
     return send_from_directory("dashboard2", "index.html")
 
+
 @app.route("/status")
 def status():
     return jsonify(STATUS)
+
 
 @app.route("/logs")
 def logs():
     return jsonify(LOGS)
 
+
 @app.route("/relatorio/atualizados")
 def relatorio_atualizados():
     return jsonify(LOG_ATUALIZADOS)
+
 
 @app.route("/relatorio/criados")
 def relatorio_criados():
     return jsonify(LOG_CRIADOS)
 
+
+# 🚀 EXECUTAR (AGORA CORRIGIDO)
 @app.route("/executar")
 def executar_manual():
-    if STATUS["rodando"]:
-        return "já está rodando"
+    global PARAR
 
-    threading.Thread(target=executar).start()
-    return "ok"
+    if STATUS["rodando"]:
+        return jsonify({"status": "já está rodando"})
+
+    # 🔥 RESETA O PARAR AQUI (CORRETO)
+    PARAR = False
+
+    thread = threading.Thread(target=executar)
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"status": "iniciado"})
+
+
+# 🛑 PARAR
+@app.route("/parar")
+def parar():
+    global PARAR
+    PARAR = True
+    return jsonify({"status": "parando"})
+
+
+# 🔄 RESET (OPCIONAL)
+@app.route("/reset")
+def reset():
+    global STATUS, LOGS, LOG_ATUALIZADOS, LOG_CRIADOS, PARAR
+
+    # 🔥 GARANTE QUE PARA TUDO
+    PARAR = True
+
+    STATUS.update({
+        "rodando": False,
+        "total": 0,
+        "processados": 0,
+        "atualizados": 0,
+        "criados": 0,
+        "erros": 0,
+        "fila": 0,
+        "inicio": None,
+        "velocidade": 0,
+        "tempo_restante": 0
+    })
+
+    LOGS.clear()
+    LOG_ATUALIZADOS.clear()
+    LOG_CRIADOS.clear()
+
+    return jsonify({"status": "resetado"})
 
 # ================= START =================
 
 def loop_automatico():
     while True:
-        log("🔄 execução automática iniciando...")
-        executar()
+        if not PARAR:
+            log("🔄 execução automática iniciando...")
+            executar()
 
-        tempo = random.randint(1800, 3600)  # 30 a 60 min
+        tempo = random.randint(1800, 3600)
         log(f"⏳ aguardando {tempo}s...")
         time.sleep(tempo)
 
