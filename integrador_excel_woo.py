@@ -41,6 +41,9 @@ def carregar_cache():
     return {}
 
 def salvar_cache(cache):
+    if len(cache) > 5000:
+        cache = dict(list(cache.items())[-5000:])
+
     with open(CACHE_FILE, "w") as f:
         json.dump(cache, f)
 
@@ -84,60 +87,19 @@ def get_wp_headers():
 
 MAX_WORKERS = 4
 
-# ================= UPLOAD IMAGEM =================
+# ================= UPLOAD IMAGEM (OTIMIZADO) =================
 
 def upload_imagem_wp(url, sku):
+    try:
+        # 🔥 agora não faz upload — usa direto a URL externa
+        if not url:
+            return None
 
-    # 🔥 SE JÁ FOI UPLOAD, USA CACHE
-    if url in CACHE_IMAGENS:
-        return CACHE_IMAGENS[url]
+        return url
 
-    for tentativa in range(3):
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-
-            r = requests.get(url, headers=headers, timeout=30)
-
-            if r.status_code != 200:
-                log(f"❌ erro download imagem {url}")
-                continue
-
-            nome = f"{sku}.jpg"
-
-            files = {
-                "file": (nome, r.content, "image/jpeg")
-            }
-
-            headers_upload = {
-                "Content-Disposition": f"attachment; filename={nome}",
-            }
-
-            r2 = requests.post(
-                URL_MEDIA,
-                headers={**get_wp_headers(), **headers_upload},
-                files=files,
-                timeout=30
-            )
-
-            if r2.status_code in [200, 201]:
-
-                try:
-                    url_wp = r2.json().get("source_url")
-                except:
-                    log(f"❌ erro JSON upload WP: {r2.text[:200]}")
-                    continue
-
-                # 🔥 SALVA CACHE
-                CACHE_IMAGENS[url] = url_wp
-
-                return url_wp
-            else:
-                log(f"❌ erro upload WP - {r2.text}")
-
-        except Exception as e:
-            log(f"⚠️ erro upload imagem {e}")
-
-    return None
+    except Exception as e:
+        log(f"⚠️ erro imagem {e}")
+        return None
 
 # ================= MAPAS =================
 
@@ -660,7 +622,7 @@ def executar():
                     restante = STATUS["total"] - STATUS["processados"]
                     STATUS["tempo_restante"] = int(restante / STATUS["velocidade"])
 
-                time.sleep(random.uniform(0.1, 0.3))
+                time.sleep(random.uniform(0.3, 0.7))
 
             except Exception as e:
                 STATUS["erros"] += 1
