@@ -30,6 +30,11 @@ PARAR = False
 FILA_BATCH = []
 BATCH_SIZE = 10
 
+# 🔥 REGRA MDL: abaixo deste saldo no fornecedor, fica ESGOTADO no Woo
+ESTOQUE_MINIMO_WOO = 10
+# 🔥 Versão da regra para forçar reprocessamento do cache quando mudar regra
+VERSAO_REGRA_ESTOQUE = "min10_v2"
+
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
@@ -47,12 +52,28 @@ def salvar_cache(cache):
     with open(CACHE_FILE, "w") as f:
         json.dump(cache, f)
 
+def estoque_woo_por_regra(saldo_fornecedor):
+    """
+    Regra MDL:
+    - Saldo do fornecedor menor que 10 = produto esgotado no WooCommerce
+    - Saldo 10 ou maior = mantém saldo real no WooCommerce
+    """
+    try:
+        saldo = int(float(saldo_fornecedor or 0))
+    except Exception:
+        saldo = 0
+
+    return saldo if saldo >= ESTOQUE_MINIMO_WOO else 0
+
 def gerar_hash(prod):
-    return f"{prod['price']}-{prod['stock']}-{len(prod['imagens'])}"
+    estoque_woo = estoque_woo_por_regra(prod.get('stock', 0))
+    return f"{VERSAO_REGRA_ESTOQUE}-{prod['price']}-{prod.get('stock',0)}-{estoque_woo}-{len(prod['imagens'])}"
 
 # 🔥 NOVA FUNÇÃO (ULTRA PERFORMANCE)
 def gerar_hash_lista(item):
-    return f"{item.get('precovenda',0)}-{item.get('saldo',0)}"
+    saldo_fornecedor = item.get('saldo', 0)
+    estoque_woo = estoque_woo_por_regra(saldo_fornecedor)
+    return f"{VERSAO_REGRA_ESTOQUE}-{item.get('precovenda',0)}-{saldo_fornecedor}-{estoque_woo}"
 
 BASE = "https://portal.juntossomosimbativeis.com.br"
 LOGIN_URL = BASE + "/login/parceiro"
@@ -397,7 +418,9 @@ def enviar(prod, cache):
     imagens_antigas = len(prod_woo.get("images", [])) if prod_woo else 0
 
     preco_novo = str(prod["price"])
-    estoque_novo = int(prod["stock"])
+    estoque_fornecedor = int(prod.get("stock", 0))
+    estoque_novo = estoque_woo_por_regra(estoque_fornecedor)
+    stock_status_novo = "instock" if estoque_novo > 0 else "outofstock"
     imagens_novas = len(prod["imagens"])
 
     cat_depto_id = get_or_create_category(prod["departamento"]) if prod["departamento"] else None
@@ -429,7 +452,8 @@ def enviar(prod, cache):
         "regular_price": preco_novo,
         "stock_quantity": estoque_novo,
         "manage_stock": True,
-        "stock_status": "instock" if estoque_novo > 0 else "outofstock",
+        "stock_status": stock_status_novo,
+        "backorders": "no",
         "status": "publish",
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
@@ -451,7 +475,10 @@ def enviar(prod, cache):
                 STATUS["atualizados"] += 1
                 LOG_ATUALIZADOS.append(prod["sku"])
 
-                log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
+                if estoque_fornecedor < ESTOQUE_MINIMO_WOO:
+                    log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 fornecedor {estoque_fornecedor} (<{ESTOQUE_MINIMO_WOO}) → WOO ESGOTADO | 🖼️ {imagens_antigas} → {imagens_novas}")
+                else:
+                    log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
             r = requests.post(URL_WOO, headers=get_auth_headers(), json=payload)
@@ -462,7 +489,10 @@ def enviar(prod, cache):
                 STATUS["criados"] += 1
                 LOG_CRIADOS.append(prod["sku"])
 
-                log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
+                if estoque_fornecedor < ESTOQUE_MINIMO_WOO:
+                    log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 fornecedor {estoque_fornecedor} (<{ESTOQUE_MINIMO_WOO}) → WOO ESGOTADO | 🖼️ {imagens_novas}")
+                else:
+                    log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
         # 👇 MESMO NÍVEL DO IF/ELSE
         cache[prod["sku"]] = hash_atual
@@ -746,8 +776,8 @@ def loop_automatico():
             log("🔄 execução automática iniciando...")
             executar()
 
-        tempo = 1200
-        log(f"⏳ aguardando {tempo}s...")
+        tempo = 1200  # 20 minutos fixo
+        log(f"⏳ aguardando {tempo}s (20 minutos)...")
         time.sleep(tempo)
 
 
