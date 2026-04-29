@@ -434,9 +434,12 @@ def enviar(prod, cache):
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
         "categories": categorias,
-        "images": imagens_upload,
         "attributes": prod["atributos"]
     }
+
+    # 🔥 só adiciona imagem se for produto novo
+    if not prod_id:
+        payload["images"] = imagens_upload
 
     try:
         if prod_id:

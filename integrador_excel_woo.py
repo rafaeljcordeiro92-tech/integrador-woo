@@ -746,7 +746,7 @@ def loop_automatico():
             log("🔄 execução automática iniciando...")
             executar()
 
-        tempo = random.randint(1800, 3600)
+        tempo = 1200
         log(f"⏳ aguardando {tempo}s...")
         time.sleep(tempo)
 

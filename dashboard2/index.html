@@ -77,6 +77,11 @@ pre {
 
 <h1>🚀 Integrador Woo - SaaS Dashboard</h1>
 
+<!-- 🕒 RELÓGIO -->
+<div style="margin-bottom:10px;">
+🕒 Hora atual: <span id="relogio"></span>
+</div>
+
 <button class="btn-run" onclick="executar()">🔄 Executar</button>
 <button class="btn-stop" onclick="parar()">🛑 Parar</button>
 
@@ -136,13 +141,25 @@ pre {
 
 let inicio = null
 
+// 🕒 RELÓGIO BRASIL
+function atualizarRelogio() {
+    const agora = new Date()
+
+    const horaBR = agora.toLocaleString("pt-BR", {
+        timeZone: "America/Sao_Paulo"
+    })
+
+    document.getElementById('relogio').innerText = horaBR
+}
+
+setInterval(atualizarRelogio, 1000)
+
 async function atualizar() {
 
     try {
 
         let status = await fetch('/status').then(r => r.json())
 
-        // STATUS
         let statusTxt = document.getElementById('status')
 
         if (status.rodando) {
@@ -156,23 +173,18 @@ async function atualizar() {
             inicio = null
         }
 
-        // MODO
         document.getElementById('modo').innerText = status.modo || "auto"
-
-        // DADOS
         document.getElementById('total').innerText = status.total || 0
         document.getElementById('processados').innerText = status.processados || 0
         document.getElementById('atualizados').innerText = status.atualizados || 0
         document.getElementById('criados').innerText = status.criados || 0
         document.getElementById('fila').innerText = status.fila || 0
 
-        // ERROS
         let erros = status.erros || 0
         let elErro = document.getElementById('erros')
         elErro.innerText = erros
         elErro.className = erros > 0 ? "big red" : "big green"
 
-        // PROGRESSO
         let total = status.total || 0
         let feitos = status.processados || 0
 
@@ -181,17 +193,14 @@ async function atualizar() {
         document.getElementById('percent').innerText = percent + "%"
         document.getElementById('barra').style.width = percent + "%"
 
-        // PERFORMANCE
         document.getElementById('velocidade').innerText = status.velocidade || 0
         document.getElementById('restante').innerText = status.tempo_restante || 0
 
-        // TEMPO EXECUÇÃO
         if (inicio) {
             let tempo = Math.floor((Date.now() - inicio) / 1000)
             document.getElementById('tempo').innerText = tempo + "s"
         }
 
-        // LOGS
         let logs = await fetch('/logs').then(r => r.json())
 
         let el = document.getElementById('logs')
