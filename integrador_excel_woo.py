@@ -9,7 +9,7 @@ import re
 import urllib3
 
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from flask import Flask, jsonify, send_from_directory
 
 # 🔒 DESATIVA WARNING DE SSL (FORNECEDOR COM CERTIFICADO VENCIDO)
@@ -39,6 +39,12 @@ VERSAO_REGRA_ESTOQUE = "min10_v3_fora_fornecedor"
 # 🔒 Segurança: só marca produtos fora do fornecedor se a lista vier com tamanho mínimo
 # Evita zerar produtos por falha temporária/API retornando lista incompleta
 MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
+
+# ⏱️ BLINDAGEM CONTRA TRAVAMENTO NO RAILWAY
+# Evita a execução ficar presa em 99% por request sem resposta ou thread travada.
+REQUEST_TIMEOUT = 45
+ITEM_TIMEOUT = 120
+EXECUCAO_MAX_SEGUNDOS = 1800  # 30 minutos
 
 # ================= CONFIG =================
 
@@ -187,7 +193,8 @@ def get_or_create_category(nome):
         r = requests.get(
             URL_WOO_CAT,
             headers=get_auth_headers(),
-            params={"search": nome}
+            params={"search": nome},
+            timeout=REQUEST_TIMEOUT
         )
 
         if r.status_code != 200:
@@ -211,7 +218,8 @@ def get_or_create_category(nome):
         r = requests.post(
             URL_WOO_CAT,
             headers=get_auth_headers(),
-            json={"name": nome}
+            json={"name": nome},
+            timeout=REQUEST_TIMEOUT
         )
 
         if r.status_code not in [200, 201]:
@@ -263,7 +271,8 @@ def get_produto_woo(sku):
         r = requests.get(
             URL_WOO,
             headers=get_auth_headers(),
-            params={"sku": sku}
+            params={"sku": sku},
+            timeout=REQUEST_TIMEOUT
         )
 
         if r.status_code != 200:
@@ -287,7 +296,8 @@ def deletar_produto_woo(prod_id, sku):
         r = requests.delete(
             f"{URL_WOO}/{prod_id}",
             headers=get_auth_headers(),
-            params={"force": True}
+            params={"force": True},
+            timeout=REQUEST_TIMEOUT
         )
 
         if r.status_code not in [200, 204]:
@@ -319,7 +329,7 @@ def listar_produtos_woo_integrador():
                     "page": page,
                     "status": "any"
                 },
-                timeout=40
+                timeout=REQUEST_TIMEOUT
             )
 
             if r.status_code != 200:
@@ -367,7 +377,7 @@ def marcar_produto_esgotado_woo(prod_woo, motivo):
             f"{URL_WOO}/{prod_id}",
             headers=get_auth_headers(),
             json=payload,
-            timeout=40
+            timeout=REQUEST_TIMEOUT
         )
 
         if r.status_code not in [200, 201]:
@@ -496,7 +506,7 @@ def get_detalhe(id, x, y):
 
     for tentativa in range(3):
         try:
-            r = session.get(url, timeout=40)
+            r = session.get(url, timeout=REQUEST_TIMEOUT)
 
             if r.status_code != 200:
                 log(f"❌ erro detalhe status {r.status_code}")
@@ -596,7 +606,7 @@ def enviar(prod, cache):
 
     try:
         if prod_id:
-            r = requests.put(f"{URL_WOO}/{prod_id}", headers=get_auth_headers(), json=payload)
+            r = requests.put(f"{URL_WOO}/{prod_id}", headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
@@ -610,7 +620,7 @@ def enviar(prod, cache):
                     log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
-            r = requests.post(URL_WOO, headers=get_auth_headers(), json=payload)
+            r = requests.post(URL_WOO, headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
@@ -802,20 +812,51 @@ def executar():
                 STATUS["processados"] += 1
                 STATUS["fila"] -= 1
 
-        # 🔥 THREAD POOL
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-            futures = []
+        # 🔥 THREAD POOL BLINDADO
+        # Não usamos "with" aqui porque, se uma thread travar, o context manager pode ficar esperando
+        # para sempre. Com shutdown(wait=False), a execução consegue finalizar e o dashboard reseta.
+        ex = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        futures = []
 
+        try:
             for item in lista:
                 if PARAR:
                     log("🛑 execução interrompida pelo usuário")
                     break
                 futures.append(ex.submit(processar, item))
 
-            for f in futures:
-                if PARAR:
+            pendentes = set(futures)
+
+            while pendentes and not PARAR:
+                tempo_execucao_total = datetime.now().timestamp() - STATUS["inicio"]
+
+                if tempo_execucao_total > EXECUCAO_MAX_SEGUNDOS:
+                    log(f"⚠️ tempo máximo de execução atingido ({EXECUCAO_MAX_SEGUNDOS}s). Finalizando pendências para não travar em 99%.")
+                    STATUS["erros"] += len(pendentes)
                     break
-                f.result()
+
+                concluidos, pendentes = wait(pendentes, timeout=5, return_when=FIRST_COMPLETED)
+
+                for f in concluidos:
+                    try:
+                        f.result(timeout=1)
+                    except Exception as e:
+                        STATUS["erros"] += 1
+                        log(f"❌ erro em thread de produto: {e}")
+
+                # Segurança extra: se por algum motivo ficar só 1 item preso por muito tempo, não deixa travar.
+                if pendentes:
+                    rodando_por = datetime.now().timestamp() - STATUS["inicio"]
+                    if STATUS["fila"] <= len(pendentes) and rodando_por > ITEM_TIMEOUT and STATUS["processados"] >= max(1, STATUS["total"] - len(pendentes)):
+                        log(f"⚠️ {len(pendentes)} item(ns) demorando demais. Cancelando pendências para liberar próxima atualização.")
+                        STATUS["erros"] += len(pendentes)
+                        break
+
+        finally:
+            for f in futures:
+                if not f.done():
+                    f.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
 
         if not PARAR:
             marcar_fora_do_fornecedor_como_esgotado(skus_fornecedor_atual, cache)
@@ -824,8 +865,16 @@ def executar():
         log(f"❌ erro geral executar: {e}")
 
     finally:
+        # 🔥 garante que o dashboard não fique preso em 99%/rodando
+        if STATUS.get("total", 0) and STATUS.get("processados", 0) >= STATUS.get("total", 0):
+            STATUS["processados"] = STATUS["total"]
+            STATUS["fila"] = 0
+        elif STATUS.get("fila", 0) < 0:
+            STATUS["fila"] = 0
+
         salvar_cache(cache)
         STATUS["rodando"] = False
+        STATUS["tempo_restante"] = 0
         log("✅ finalizado")
 
 # ================= ROTAS =================
