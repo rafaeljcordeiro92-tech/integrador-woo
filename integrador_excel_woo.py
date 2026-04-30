@@ -5,6 +5,7 @@ import base64
 import json
 import time
 import random
+import re
 import urllib3
 
 from datetime import datetime
@@ -33,7 +34,11 @@ BATCH_SIZE = 10
 # 🔥 REGRA MDL: abaixo deste saldo no fornecedor, fica ESGOTADO no Woo
 ESTOQUE_MINIMO_WOO = 10
 # 🔥 Versão da regra para forçar reprocessamento do cache quando mudar regra
-VERSAO_REGRA_ESTOQUE = "min10_v2"
+VERSAO_REGRA_ESTOQUE = "min10_v3_fora_fornecedor"
+
+# 🔒 Segurança: só marca produtos fora do fornecedor se a lista vier com tamanho mínimo
+# Evita zerar produtos por falha temporária/API retornando lista incompleta
+MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
 
 # ================= CONFIG =================
 
@@ -293,6 +298,130 @@ def deletar_produto_woo(prod_id, sku):
     except Exception as e:
         log(f"❌ erro ao deletar {sku}: {e}")
 
+
+def sku_integrador_valido(sku):
+    """Considera apenas SKUs gerados pelo integrador: idproduto.idgradex.idgradey"""
+    return bool(re.match(r"^\d+\.\d+\.\d+$", str(sku or "").strip()))
+
+
+def listar_produtos_woo_integrador():
+    """Lista produtos do WooCommerce que parecem ter sido criados pelo integrador."""
+    produtos = []
+    page = 1
+
+    while True:
+        try:
+            r = requests.get(
+                URL_WOO,
+                headers=get_auth_headers(),
+                params={
+                    "per_page": 100,
+                    "page": page,
+                    "status": "any"
+                },
+                timeout=40
+            )
+
+            if r.status_code != 200:
+                log(f"❌ erro listar Woo página {page} - {r.status_code} - {r.text[:150]}")
+                break
+
+            data = r.json()
+            if not data:
+                break
+
+            for prod in data:
+                sku = prod.get("sku", "")
+                if sku_integrador_valido(sku):
+                    produtos.append(prod)
+
+            if len(data) < 100:
+                break
+
+            page += 1
+
+        except Exception as e:
+            log(f"❌ erro listar produtos Woo: {e}")
+            break
+
+    return produtos
+
+
+def marcar_produto_esgotado_woo(prod_woo, motivo):
+    """Atualiza um produto existente no Woo para esgotado."""
+    sku = prod_woo.get("sku", "-")
+    prod_id = prod_woo.get("id")
+
+    if not prod_id:
+        return False
+
+    try:
+        payload = {
+            "manage_stock": True,
+            "stock_quantity": 0,
+            "stock_status": "outofstock",
+            "backorders": "no"
+        }
+
+        r = requests.put(
+            f"{URL_WOO}/{prod_id}",
+            headers=get_auth_headers(),
+            json=payload,
+            timeout=40
+        )
+
+        if r.status_code not in [200, 201]:
+            log(f"❌ erro marcar esgotado {sku} - {r.status_code} - {r.text[:200]}")
+            return False
+
+        STATUS["atualizados"] += 1
+        LOG_ATUALIZADOS.append(sku)
+        log(f"🚫 {sku} marcado como ESGOTADO no Woo | motivo: {motivo}")
+        return True
+
+    except Exception as e:
+        STATUS["erros"] += 1
+        log(f"❌ erro marcar esgotado {sku}: {e}")
+        return False
+
+
+def marcar_fora_do_fornecedor_como_esgotado(skus_fornecedor, cache):
+    """
+    Regra MDL:
+    Se um SKU criado pelo integrador existe no Woo, mas não veio mais na lista atual do fornecedor,
+    ele deve ficar ESGOTADO no WooCommerce.
+    """
+    if len(skus_fornecedor) < MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA:
+        log(
+            f"⚠️ conferência fora-fornecedor ignorada: lista fornecedor muito pequena "
+            f"({len(skus_fornecedor)} itens). Segurança ativada."
+        )
+        return
+
+    log("🔎 conferindo produtos que não existem mais no fornecedor...")
+
+    produtos_woo = listar_produtos_woo_integrador()
+    total_marcados = 0
+
+    for prod_woo in produtos_woo:
+        sku = prod_woo.get("sku", "")
+
+        if sku in skus_fornecedor:
+            continue
+
+        estoque_atual = prod_woo.get("stock_quantity")
+        status_atual = prod_woo.get("stock_status")
+
+        # Se já está esgotado, não precisa reenviar toda execução
+        if status_atual == "outofstock" and (estoque_atual in [0, None, "0"]):
+            continue
+
+        if marcar_produto_esgotado_woo(prod_woo, "não veio mais na lista atual do fornecedor"):
+            total_marcados += 1
+            cache[sku] = f"{VERSAO_REGRA_ESTOQUE}-FORA_FORNECEDOR-ESGOTADO"
+
+    log(f"✅ conferência fora-fornecedor concluída | marcados como esgotado: {total_marcados}")
+
 # ================= FILTRO =================
 
 def deve_bloquear(nome):
@@ -547,6 +676,14 @@ def executar():
 
         lista = data.get("itens", [])
 
+        # SKUs que vieram na lista atual do fornecedor.
+        # Usado no fim da execução para marcar como ESGOTADO no Woo
+        # tudo que existe no Woo, mas não existe mais no fornecedor.
+        skus_fornecedor_atual = {
+            f"{item['idproduto']}.{item.get('idgradex',0)}.{item.get('idgradey',0)}"
+            for item in lista
+        }
+
         STATUS["total"] = len(lista)
         STATUS["processados"] = 0
         STATUS["fila"] = len(lista)
@@ -679,6 +816,9 @@ def executar():
                 if PARAR:
                     break
                 f.result()
+
+        if not PARAR:
+            marcar_fora_do_fornecedor_como_esgotado(skus_fornecedor_atual, cache)
 
     except Exception as e:
         log(f"❌ erro geral executar: {e}")
