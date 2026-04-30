@@ -9,6 +9,10 @@ import re
 import urllib3
 
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from flask import Flask, jsonify, send_from_directory
 
@@ -20,6 +24,20 @@ session = requests.Session()
 session.verify = False
 
 app = Flask(__name__)
+
+# 🇧🇷 HORÁRIO DE BRASÍLIA
+BR_TZ = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
+try:
+    os.environ["TZ"] = "America/Sao_Paulo"
+    if hasattr(time, "tzset"):
+        time.tzset()
+except Exception:
+    pass
+
+def agora_brasilia():
+    if BR_TZ:
+        return datetime.now(BR_TZ)
+    return datetime.now()
 
 # 🔥 CACHE DE IMAGENS (ULTRA PERFORMANCE)
 CACHE_IMAGENS = {}
@@ -42,9 +60,9 @@ MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
 
 # ⏱️ BLINDAGEM CONTRA TRAVAMENTO NO RAILWAY
 # Evita a execução ficar presa em 99% por request sem resposta ou thread travada.
-REQUEST_TIMEOUT = 45
-ITEM_TIMEOUT = 120
-EXECUCAO_MAX_SEGUNDOS = 1800  # 30 minutos
+REQUEST_TIMEOUT = 35
+ITEM_TIMEOUT = 0  # desativado: não cancela lote inteiro por tempo de item
+EXECUCAO_MAX_SEGUNDOS = 3600  # 60 minutos de segurança
 
 # ================= CONFIG =================
 
@@ -260,7 +278,7 @@ LOG_CRIADOS = []
 
 def log(msg):
     print(msg)
-    LOGS.append(f"{datetime.now()} - {msg}")
+    LOGS.append(f"{agora_brasilia().strftime('%Y-%m-%d %H:%M:%S')} - {msg}")
     if len(LOGS) > 300:
         LOGS.pop(0)
 
@@ -663,7 +681,7 @@ def executar():
         "atualizados": 0,
         "criados": 0,
         "erros": 0,
-        "inicio": datetime.now().timestamp()
+        "inicio": time.time()
     })
 
     try:
@@ -762,7 +780,7 @@ def executar():
                     data_fim = item.get("datafinal_gabarito")
 
                     try:
-                        hoje = datetime.now().date()
+                        hoje = agora_brasilia().date()
 
                         if data_ini and data_fim:
                             data_ini = datetime.strptime(data_ini, "%d/%m/%Y").date()
@@ -793,7 +811,7 @@ def executar():
 
                 cache[sku] = hash_atual
 
-                tempo_execucao = datetime.now().timestamp() - STATUS["inicio"]
+                tempo_execucao = time.time() - STATUS["inicio"]
 
                 if tempo_execucao > 0:
                     STATUS["velocidade"] = round(STATUS["processados"] / tempo_execucao, 2)
@@ -812,6 +830,8 @@ def executar():
                 STATUS["processados"] += 1
                 STATUS["fila"] -= 1
 
+        execucao_completa = False
+
         # 🔥 THREAD POOL BLINDADO
         # Não usamos "with" aqui porque, se uma thread travar, o context manager pode ficar esperando
         # para sempre. Com shutdown(wait=False), a execução consegue finalizar e o dashboard reseta.
@@ -828,11 +848,10 @@ def executar():
             pendentes = set(futures)
 
             while pendentes and not PARAR:
-                tempo_execucao_total = datetime.now().timestamp() - STATUS["inicio"]
+                tempo_execucao_total = time.time() - STATUS["inicio"]
 
                 if tempo_execucao_total > EXECUCAO_MAX_SEGUNDOS:
-                    log(f"⚠️ tempo máximo de execução atingido ({EXECUCAO_MAX_SEGUNDOS}s). Finalizando pendências para não travar em 99%.")
-                    STATUS["erros"] += len(pendentes)
+                    log(f"⚠️ tempo máximo de execução atingido ({EXECUCAO_MAX_SEGUNDOS}s). Encerrando ciclo sem contar pendentes como erro em massa.")
                     break
 
                 concluidos, pendentes = wait(pendentes, timeout=5, return_when=FIRST_COMPLETED)
@@ -844,13 +863,7 @@ def executar():
                         STATUS["erros"] += 1
                         log(f"❌ erro em thread de produto: {e}")
 
-                # Segurança extra: se por algum motivo ficar só 1 item preso por muito tempo, não deixa travar.
-                if pendentes:
-                    rodando_por = datetime.now().timestamp() - STATUS["inicio"]
-                    if STATUS["fila"] <= len(pendentes) and rodando_por > ITEM_TIMEOUT and STATUS["processados"] >= max(1, STATUS["total"] - len(pendentes)):
-                        log(f"⚠️ {len(pendentes)} item(ns) demorando demais. Cancelando pendências para liberar próxima atualização.")
-                        STATUS["erros"] += len(pendentes)
-                        break
+            execucao_completa = (not pendentes and not PARAR)
 
         finally:
             for f in futures:
@@ -858,18 +871,20 @@ def executar():
                     f.cancel()
             ex.shutdown(wait=False, cancel_futures=True)
 
-        if not PARAR:
+        if execucao_completa and not PARAR:
             marcar_fora_do_fornecedor_como_esgotado(skus_fornecedor_atual, cache)
+        else:
+            log("⚠️ conferência fora-fornecedor pulada porque o ciclo não finalizou 100%.")
 
     except Exception as e:
         log(f"❌ erro geral executar: {e}")
 
     finally:
-        # 🔥 garante que o dashboard não fique preso em 99%/rodando
-        if STATUS.get("total", 0) and STATUS.get("processados", 0) >= STATUS.get("total", 0):
-            STATUS["processados"] = STATUS["total"]
+        # 🔥 garante que o dashboard não fique preso em rodando
+        if STATUS.get("fila", 0) < 0:
             STATUS["fila"] = 0
-        elif STATUS.get("fila", 0) < 0:
+        if STATUS.get("processados", 0) >= STATUS.get("total", 0) and STATUS.get("total", 0):
+            STATUS["processados"] = STATUS["total"]
             STATUS["fila"] = 0
 
         salvar_cache(cache)
@@ -887,6 +902,11 @@ def dashboard():
 @app.route("/status")
 def status():
     return jsonify(STATUS)
+
+
+@app.route("/hora")
+def hora():
+    return jsonify({"hora_brasilia": agora_brasilia().strftime("%d/%m/%Y, %H:%M:%S")})
 
 
 @app.route("/logs")
