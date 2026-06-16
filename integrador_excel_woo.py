@@ -61,7 +61,6 @@ MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
 # ⏱️ BLINDAGEM CONTRA TRAVAMENTO NO RAILWAY
 # Evita a execução ficar presa em 99% por request sem resposta ou thread travada.
 REQUEST_TIMEOUT = 35
-VERIFY_SSL_WOO = False  # 🔒 MDL: desativa validação SSL nas chamadas para o WooCommerce
 ITEM_TIMEOUT = 0  # desativado: não cancela lote inteiro por tempo de item
 EXECUCAO_MAX_SEGUNDOS = 3600  # 60 minutos de segurança
 
@@ -136,26 +135,6 @@ def get_wp_headers():
         "Authorization": f"Basic {token}"
     }
 
-def woo_get(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.get(url, **kwargs)
-
-def woo_post(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.post(url, **kwargs)
-
-def woo_put(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.put(url, **kwargs)
-
-def woo_delete(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.delete(url, **kwargs)
-
 MAX_WORKERS = 4
 
 # ================= UPLOAD IMAGEM (OTIMIZADO) =================
@@ -171,6 +150,90 @@ def upload_imagem_wp(url, sku):
     except Exception as e:
         log(f"⚠️ erro imagem {e}")
         return None
+
+def normalizar_url_imagem(valor):
+    """
+    O fornecedor às vezes retorna imagem como string, lista, dict ou None.
+    Esta função transforma somente valores válidos em URL de imagem para o Woo.
+    """
+    if valor is None:
+        return []
+
+    urls = []
+
+    if isinstance(valor, list):
+        for item in valor:
+            urls.extend(normalizar_url_imagem(item))
+        return urls
+
+    if isinstance(valor, dict):
+        # tenta chaves mais comuns primeiro, depois varre tudo
+        for chave in ["src", "url", "grande", "media", "pequena", "arquivo", "nome", "imagem"]:
+            if chave in valor:
+                urls.extend(normalizar_url_imagem(valor.get(chave)))
+
+        if not urls:
+            for item in valor.values():
+                urls.extend(normalizar_url_imagem(item))
+
+        return urls
+
+    if not isinstance(valor, str):
+        return []
+
+    src = valor.strip()
+
+    if not src or src.lower() in ["none", "null", "undefined", "false"]:
+        return []
+
+    # URL completa já pronta
+    if src.startswith("http://") or src.startswith("https://"):
+        return [src]
+
+    # caminho relativo do fornecedor
+    if "files/Catalogo" in src:
+        return [BASE + "/" + src.lstrip("/")]
+
+    # somente nome do arquivo da imagem, exemplo: 1363.1.1.1.JPG
+    if re.search(r"\.(jpg|jpeg|png|webp)$", src, re.IGNORECASE):
+        return [f"{BASE}/files/Catalogo/600_/{src.lstrip('/')}"]
+
+    return []
+
+def url_imagem_existe(url):
+    """Confere rapidamente se a URL da imagem responde antes de mandar para o Woo."""
+    try:
+        r = session.get(url, timeout=12, stream=True)
+        content_type = r.headers.get("Content-Type", "").lower()
+        return r.status_code == 200 and ("image" in content_type or url.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
+    except Exception:
+        return False
+
+def coletar_imagens_detalhe(detalhe, sku):
+    """Coleta imagens reais do retorno do fornecedor e cria fallback pelo padrão do catálogo."""
+    urls = []
+
+    fotos = detalhe.get("fotos", {}) if isinstance(detalhe, dict) else {}
+    imagens_raw = fotos.get("imagem", []) if isinstance(fotos, dict) else []
+
+    urls.extend(normalizar_url_imagem(imagens_raw))
+
+    # remove duplicadas mantendo ordem
+    urls_unicas = []
+    for url in urls:
+        if url and isinstance(url, str) and url not in urls_unicas:
+            urls_unicas.append(url)
+
+    # Se o fornecedor vier estranho/None, tenta pelo padrão que você confirmou no navegador:
+    # https://portal.juntossomosimbativeis.com.br/files/Catalogo/600_/1363.1.1.1.JPG
+    if not urls_unicas:
+        fallback = f"{BASE}/files/Catalogo/600_/{sku}.1.JPG"
+        if url_imagem_existe(fallback):
+            urls_unicas.append(fallback)
+        else:
+            log(f"⚠️ {sku} sem imagem válida no fornecedor")
+
+    return [{"src": url} for url in urls_unicas]
 
 # ================= MAPAS =================
 
@@ -360,7 +423,7 @@ def listar_produtos_woo_integrador():
 
     while True:
         try:
-            r = woo_get(
+            r = requests.get(
                 URL_WOO,
                 headers=get_auth_headers(),
                 params={
@@ -610,44 +673,34 @@ def enviar(prod, cache):
     if cat_sub_id:
         categorias.append({"id": cat_sub_id})
 
-    # 🔥 IMAGENS
+    # 🔥 IMAGENS - BLINDADO
     imagens_upload = []
 
     for img in prod["imagens"]:
         try:
-            # 🔒 Blindagem MDL: o Woo exige que images[].src seja string URL.
-            # Alguns retornos do fornecedor podem vir como lista/dicionário ou valor inválido.
             src = img.get("src") if isinstance(img, dict) else img
+            urls_validas = normalizar_url_imagem(src)
 
-            if isinstance(src, list):
-                src = src[0] if src else None
-
-            if isinstance(src, dict):
-                src = src.get("url") or src.get("src") or src.get("grande")
-
-            if not isinstance(src, str):
-                log(f"⚠️ imagem ignorada {prod['sku']} - src inválido: {type(src)}")
-                continue
-
-            src = src.strip()
-
-            if not src.startswith("http"):
-                log(f"⚠️ imagem ignorada {prod['sku']} - URL inválida: {src}")
-                continue
-
-            url_wp = upload_imagem_wp(src, prod["sku"])
-
-            if url_wp and isinstance(url_wp, str):
-                imagens_upload.append({"src": url_wp})
+            for url in urls_validas:
+                url_wp = upload_imagem_wp(url, prod["sku"])
+                if url_wp and isinstance(url_wp, str) and url_wp.startswith("http"):
+                    imagens_upload.append({"src": url_wp})
 
         except Exception as e:
             log(f"⚠️ imagem ignorada {prod['sku']} - erro: {e}")
 
-    # 🔥 SE NÃO TIVER NENHUMA IMAGEM, USA PADRÃO
+    # remove duplicadas para não enviar imagem repetida ao Woo
+    imagens_sem_duplicar = []
+    urls_ja_usadas = set()
+    for img in imagens_upload:
+        src = img.get("src")
+        if src and src not in urls_ja_usadas:
+            imagens_sem_duplicar.append(img)
+            urls_ja_usadas.add(src)
+    imagens_upload = imagens_sem_duplicar
+
     if not imagens_upload:
-        imagens_upload.append({
-            "src": "https://moveisdolar.com.br/wp-content/uploads/2026/04/Sem-imagem-disponivel.png"
-        })
+        log(f"⚠️ {prod['sku']} sem imagem válida para enviar ao Woo")
 
     payload = {
         "name": prod["name"],
@@ -664,9 +717,14 @@ def enviar(prod, cache):
         "attributes": prod["atributos"]
     }
 
-    # 🔥 só adiciona imagem se for produto novo
-    if not prod_id:
+    # 🔥 só adiciona imagem se for produto novo E se tiver imagem válida
+    if not prod_id and imagens_upload:
         payload["images"] = imagens_upload
+
+    # MDL: produto novo sem imagem válida não será criado, para não poluir o site com produto sem foto.
+    if not prod_id and not imagens_upload:
+        log(f"🚫 não criado {prod['sku']} - sem imagem válida no fornecedor")
+        return
 
     try:
         if prod_id:
@@ -793,10 +851,7 @@ def executar():
                 departamento = MAPA_DEPARTAMENTOS.get(id_departamento, "GERAL")
                 categoria = MAPA_SUBDEPARTAMENTOS.get(id_categoria, "GERAL")
 
-                imagens = []
-                for img in detalhe.get("fotos", {}).get("imagem", []):
-                    for url in img.get("grande", []):
-                        imagens.append({"src": url})
+                imagens = coletar_imagens_detalhe(detalhe, sku)
 
                 descricao_curta = detalhe.get("descricaodetalhada", "")
                 descricao_tecnica = detalhe.get("descricaotecnica", "")
