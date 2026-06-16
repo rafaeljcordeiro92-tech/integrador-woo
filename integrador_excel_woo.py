@@ -360,7 +360,7 @@ def listar_produtos_woo_integrador():
 
     while True:
         try:
-            r = requests.get(
+            r = woo_get(
                 URL_WOO,
                 headers=get_auth_headers(),
                 params={
@@ -614,9 +614,34 @@ def enviar(prod, cache):
     imagens_upload = []
 
     for img in prod["imagens"]:
-        url_wp = upload_imagem_wp(img["src"], prod["sku"])
-        if url_wp:
-            imagens_upload.append({"src": url_wp})
+        try:
+            # 🔒 Blindagem MDL: o Woo exige que images[].src seja string URL.
+            # Alguns retornos do fornecedor podem vir como lista/dicionário ou valor inválido.
+            src = img.get("src") if isinstance(img, dict) else img
+
+            if isinstance(src, list):
+                src = src[0] if src else None
+
+            if isinstance(src, dict):
+                src = src.get("url") or src.get("src") or src.get("grande")
+
+            if not isinstance(src, str):
+                log(f"⚠️ imagem ignorada {prod['sku']} - src inválido: {type(src)}")
+                continue
+
+            src = src.strip()
+
+            if not src.startswith("http"):
+                log(f"⚠️ imagem ignorada {prod['sku']} - URL inválida: {src}")
+                continue
+
+            url_wp = upload_imagem_wp(src, prod["sku"])
+
+            if url_wp and isinstance(url_wp, str):
+                imagens_upload.append({"src": url_wp})
+
+        except Exception as e:
+            log(f"⚠️ imagem ignorada {prod['sku']} - erro: {e}")
 
     # 🔥 SE NÃO TIVER NENHUMA IMAGEM, USA PADRÃO
     if not imagens_upload:
