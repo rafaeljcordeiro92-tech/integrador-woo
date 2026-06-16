@@ -61,6 +61,7 @@ MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
 # ⏱️ BLINDAGEM CONTRA TRAVAMENTO NO RAILWAY
 # Evita a execução ficar presa em 99% por request sem resposta ou thread travada.
 REQUEST_TIMEOUT = 35
+VERIFY_SSL_WOO = False  # 🔒 MDL: desativa validação SSL nas chamadas para o WooCommerce
 ITEM_TIMEOUT = 0  # desativado: não cancela lote inteiro por tempo de item
 EXECUCAO_MAX_SEGUNDOS = 3600  # 60 minutos de segurança
 
@@ -135,6 +136,26 @@ def get_wp_headers():
         "Authorization": f"Basic {token}"
     }
 
+def woo_get(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.get(url, **kwargs)
+
+def woo_post(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.post(url, **kwargs)
+
+def woo_put(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.put(url, **kwargs)
+
+def woo_delete(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.delete(url, **kwargs)
+
 MAX_WORKERS = 4
 
 # ================= UPLOAD IMAGEM (OTIMIZADO) =================
@@ -208,7 +229,7 @@ def get_or_create_category(nome):
 
     try:
         # 🔥 GET categoria
-        r = requests.get(
+        r = woo_get(
             URL_WOO_CAT,
             headers=get_auth_headers(),
             params={"search": nome},
@@ -233,7 +254,7 @@ def get_or_create_category(nome):
                 return cat["id"]
 
         # 🔥 cria categoria
-        r = requests.post(
+        r = woo_post(
             URL_WOO_CAT,
             headers=get_auth_headers(),
             json={"name": nome},
@@ -286,7 +307,7 @@ def log(msg):
 
 def get_produto_woo(sku):
     try:
-        r = requests.get(
+        r = woo_get(
             URL_WOO,
             headers=get_auth_headers(),
             params={"sku": sku},
@@ -311,7 +332,7 @@ def get_produto_woo(sku):
 
 def deletar_produto_woo(prod_id, sku):
     try:
-        r = requests.delete(
+        r = woo_delete(
             f"{URL_WOO}/{prod_id}",
             headers=get_auth_headers(),
             params={"force": True},
@@ -391,7 +412,7 @@ def marcar_produto_esgotado_woo(prod_woo, motivo):
             "backorders": "no"
         }
 
-        r = requests.put(
+        r = woo_put(
             f"{URL_WOO}/{prod_id}",
             headers=get_auth_headers(),
             json=payload,
@@ -624,7 +645,7 @@ def enviar(prod, cache):
 
     try:
         if prod_id:
-            r = requests.put(f"{URL_WOO}/{prod_id}", headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
+            r = woo_put(f"{URL_WOO}/{prod_id}", headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
@@ -638,7 +659,7 @@ def enviar(prod, cache):
                     log(f"♻️ {prod['sku']} | 💰 {preco_antigo} → {preco_novo} | 📦 {estoque_antigo} → {estoque_novo} | 🖼️ {imagens_antigas} → {imagens_novas}")
 
         else:
-            r = requests.post(URL_WOO, headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
+            r = woo_post(URL_WOO, headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
 
             if r.status_code not in [200, 201]:
                 log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
