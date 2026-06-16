@@ -178,6 +178,12 @@ def normalizar_url_imagem(valor):
     """
     O fornecedor às vezes retorna imagem como string, lista, dict ou None.
     Esta função transforma somente valores válidos em URL de imagem para o Woo.
+
+    Correção MDL:
+    - Se vier caminho relativo tipo Catalogo/600_/arquivo.JPG, monta URL correta.
+    - Se vier files/Catalogo/600_/arquivo.JPG, monta URL correta.
+    - Se vier só o nome do arquivo, prefixa /files/Catalogo/600_/.
+    - Evita duplicar /Catalogo/600_/Catalogo/600_/.
     """
     if valor is None:
         return []
@@ -204,22 +210,29 @@ def normalizar_url_imagem(valor):
     if not isinstance(valor, str):
         return []
 
-    src = valor.strip()
+    src = valor.strip().replace("\\", "/")
 
     if not src or src.lower() in ["none", "null", "undefined", "false"]:
         return []
+
+    # remove barras iniciais para tratar caminhos relativos
+    src_limpo = src.lstrip("/")
 
     # URL completa já pronta
     if src.startswith("http://") or src.startswith("https://"):
         return [src]
 
-    # caminho relativo do fornecedor
-    if "files/Catalogo" in src:
-        return [BASE + "/" + src.lstrip("/")]
+    # caminho relativo completo do fornecedor: files/Catalogo/600_/arquivo.JPG
+    if src_limpo.lower().startswith("files/catalogo/"):
+        return [BASE + "/" + src_limpo]
+
+    # caminho relativo sem /files: Catalogo/600_/arquivo.JPG
+    if src_limpo.lower().startswith("catalogo/"):
+        return [BASE + "/files/" + src_limpo]
 
     # somente nome do arquivo da imagem, exemplo: 1363.1.1.1.JPG
-    if re.search(r"\.(jpg|jpeg|png|webp)$", src, re.IGNORECASE):
-        return [f"{BASE}/files/Catalogo/600_/{src.lstrip('/')}"]
+    if re.search(r"\.(jpg|jpeg|png|webp)$", src_limpo, re.IGNORECASE):
+        return [f"{BASE}/files/Catalogo/600_/{src_limpo}"]
 
     return []
 
@@ -706,8 +719,16 @@ def enviar(prod, cache):
 
             for url in urls_validas:
                 url_wp = upload_imagem_wp(url, prod["sku"])
-                if url_wp and isinstance(url_wp, str) and url_wp.startswith("http"):
-                    imagens_upload.append({"src": url_wp})
+                if not (url_wp and isinstance(url_wp, str) and url_wp.startswith("http")):
+                    continue
+
+                # Confere se a imagem existe antes de mandar para o Woo.
+                # Evita erro 400: woocommerce_product_image_upload_error / Not Found.
+                if not url_imagem_existe(url_wp):
+                    log(f"⚠️ imagem ignorada {prod['sku']} - URL não encontrada: {url_wp}")
+                    continue
+
+                imagens_upload.append({"src": url_wp})
 
         except Exception as e:
             log(f"⚠️ imagem ignorada {prod['sku']} - erro: {e}")
