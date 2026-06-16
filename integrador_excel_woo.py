@@ -135,6 +135,28 @@ def get_wp_headers():
         "Authorization": f"Basic {token}"
     }
 
+
+# ================= WOO REQUESTS COM SSL DESATIVADO =================
+def woo_get(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.get(url, **kwargs)
+
+def woo_post(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.post(url, **kwargs)
+
+def woo_put(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.put(url, **kwargs)
+
+def woo_delete(url, **kwargs):
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_SSL_WOO)
+    return requests.delete(url, **kwargs)
+
 MAX_WORKERS = 4
 
 # ================= UPLOAD IMAGEM (OTIMIZADO) =================
@@ -423,7 +445,7 @@ def listar_produtos_woo_integrador():
 
     while True:
         try:
-            r = requests.get(
+            r = woo_get(
                 URL_WOO,
                 headers=get_auth_headers(),
                 params={
