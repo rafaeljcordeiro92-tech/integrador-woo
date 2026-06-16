@@ -61,6 +61,7 @@ MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
 # ⏱️ BLINDAGEM CONTRA TRAVAMENTO NO RAILWAY
 # Evita a execução ficar presa em 99% por request sem resposta ou thread travada.
 REQUEST_TIMEOUT = 35
+VERIFY_SSL_WOO = False  # 🔒 desativa validação SSL nas chamadas do WooCommerce
 ITEM_TIMEOUT = 0  # desativado: não cancela lote inteiro por tempo de item
 EXECUCAO_MAX_SEGUNDOS = 3600  # 60 minutos de segurança
 
