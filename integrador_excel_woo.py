@@ -14,7 +14,7 @@ try:
 except Exception:
     ZoneInfo = None
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, Response
 
 # 🔒 DESATIVA WARNING DE SSL (FORNECEDOR COM CERTIFICADO VENCIDO)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -159,6 +159,82 @@ def woo_delete(url, **kwargs):
     return requests.delete(url, **kwargs)
 
 MAX_WORKERS = 4
+
+# ================= TELEGRAM ALERTAS =================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_ALERTAS_ATIVOS = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+TELEGRAM_ULTIMO_ALERTA = 0
+TELEGRAM_INTERVALO_MINIMO = 300  # 5 minutos para não lotar o Telegram
+
+def enviar_telegram(mensagem, forcar=False):
+    """
+    Envia mensagem para o Telegram.
+    - Usa variáveis do Railway:
+      TELEGRAM_BOT_TOKEN
+      TELEGRAM_CHAT_ID
+    """
+    global TELEGRAM_ULTIMO_ALERTA
+
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram não configurado: faltam TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID")
+        return False
+
+    agora = time.time()
+
+    if not forcar and (agora - TELEGRAM_ULTIMO_ALERTA) < TELEGRAM_INTERVALO_MINIMO:
+        return False
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": str(mensagem)[:3900],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+
+        r = requests.post(url, json=payload, timeout=15)
+
+        if r.status_code == 200:
+            TELEGRAM_ULTIMO_ALERTA = agora
+            return True
+
+        print(f"⚠️ falha Telegram status {r.status_code}: {r.text[:300]}")
+        return False
+
+    except Exception as e:
+        print(f"⚠️ erro ao enviar Telegram: {e}")
+        return False
+
+
+def alerta_telegram_erro(msg):
+    """
+    Envia alerta apenas para erros reais, com trava anti-spam.
+    Avisos de imagem ignorada não entram aqui.
+    """
+    texto = str(msg)
+
+    ignorar = [
+        "imagem ignorada",
+        "URL não encontrada",
+        "sem imagem válida"
+    ]
+
+    if any(p.lower() in texto.lower() for p in ignorar):
+        return
+
+    mensagem = (
+        "🚨 <b>Erro no Integrador Woo MDL</b>\n\n"
+        f"🕒 {agora_brasilia().strftime('%d/%m/%Y %H:%M:%S')}\n"
+        f"⚠️ {texto[:1200]}\n\n"
+        "🔗 Painel: https://integrador-woo-production.up.railway.app"
+    )
+
+    enviar_telegram(mensagem, forcar=False)
+
+
 
 # ================= UPLOAD IMAGEM (OTIMIZADO) =================
 
@@ -401,6 +477,13 @@ def log(msg):
     LOGS.append(f"{agora_brasilia().strftime('%Y-%m-%d %H:%M:%S')} - {msg}")
     if len(LOGS) > 300:
         LOGS.pop(0)
+
+    # Telegram: envia alerta somente para erros críticos, com trava anti-spam.
+    try:
+        if str(msg).strip().startswith("❌"):
+            alerta_telegram_erro(msg)
+    except Exception as e:
+        print(f"⚠️ falha alerta Telegram no log: {e}")
 
 # ================= WOO EXTRA =================
 
@@ -1033,15 +1116,104 @@ def executar():
             STATUS["fila"] = 0
 
         salvar_cache(cache)
+        erros_ciclo = STATUS.get("erros", 0)
+
         STATUS["rodando"] = False
         STATUS["tempo_restante"] = 0
+
+        if erros_ciclo and erros_ciclo > 0:
+            enviar_telegram(
+                "⚠️ <b>Integrador Woo MDL finalizou com erros</b>\n\n"
+                f"🕒 {agora_brasilia().strftime('%d/%m/%Y %H:%M:%S')}\n"
+                f"❌ Erros no ciclo: {erros_ciclo}\n"
+                f"📦 Processados: {STATUS.get('processados', 0)} / {STATUS.get('total', 0)}\n"
+                f"♻️ Atualizados: {STATUS.get('atualizados', 0)}\n"
+                f"🆕 Criados: {STATUS.get('criados', 0)}\n\n"
+                "🔗 Painel: https://integrador-woo-production.up.railway.app",
+                forcar=True
+            )
+
         log("✅ finalizado")
 
 # ================= ROTAS =================
 
 @app.route("/")
 def dashboard():
-    return send_from_directory("dashboard2", "index.html")
+    """
+    Carrega o dashboard e injeta automaticamente o botão de teste do Telegram,
+    sem precisar editar o arquivo dashboard2/index.html.
+    """
+    try:
+        caminho = os.path.join(app.root_path, "dashboard2", "index.html")
+
+        with open(caminho, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        botao_telegram_js = """
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    if (document.getElementById("btn-testar-telegram-mdl")) return;
+
+    const btn = document.createElement("button");
+    btn.id = "btn-testar-telegram-mdl";
+    btn.innerHTML = "📨 Testar Telegram";
+    btn.style.background = "#229ED9";
+    btn.style.color = "#fff";
+    btn.style.border = "0";
+    btn.style.borderRadius = "8px";
+    btn.style.padding = "10px 16px";
+    btn.style.fontWeight = "700";
+    btn.style.cursor = "pointer";
+    btn.style.marginLeft = "10px";
+    btn.style.boxShadow = "0 4px 12px rgba(0,0,0,.18)";
+
+    btn.onclick = async function () {
+        btn.disabled = true;
+        const original = btn.innerHTML;
+        btn.innerHTML = "⏳ Enviando...";
+
+        try {
+            const r = await fetch("/testar-telegram");
+            const data = await r.json();
+
+            if (data.ok) {
+                alert("✅ Mensagem de teste enviada no Telegram!");
+            } else {
+                alert("❌ Falha ao enviar Telegram: " + (data.erro || data.status || "verifique as variáveis no Railway"));
+            }
+        } catch (e) {
+            alert("❌ Erro ao testar Telegram: " + e);
+        }
+
+        btn.innerHTML = original;
+        btn.disabled = false;
+    };
+
+    const botoes = Array.from(document.querySelectorAll("button, a"));
+    const botaoParar = botoes.find(el => (el.textContent || "").toLowerCase().includes("parar"));
+    const botaoExecutar = botoes.find(el => (el.textContent || "").toLowerCase().includes("executar"));
+
+    if (botaoParar && botaoParar.parentElement) {
+        botaoParar.insertAdjacentElement("afterend", btn);
+    } else if (botaoExecutar && botaoExecutar.parentElement) {
+        botaoExecutar.insertAdjacentElement("afterend", btn);
+    } else {
+        document.body.prepend(btn);
+    }
+});
+</script>
+"""
+
+        if "</body>" in html:
+            html = html.replace("</body>", botao_telegram_js + "\n</body>")
+        else:
+            html += botao_telegram_js
+
+        return Response(html, mimetype="text/html")
+
+    except Exception as e:
+        print(f"⚠️ falha ao injetar botão Telegram: {e}")
+        return send_from_directory("dashboard2", "index.html")
 
 
 @app.route("/status")
@@ -1085,6 +1257,25 @@ def executar_manual():
     thread.start()
 
     return jsonify({"status": "iniciado"})
+
+
+
+@app.route("/testar-telegram")
+def testar_telegram():
+    ok = enviar_telegram(
+        "✅ <b>Teste Telegram MDL</b>\n\n"
+        f"Mensagem enviada pelo integrador em {agora_brasilia().strftime('%d/%m/%Y %H:%M:%S')}.\n"
+        "Se você recebeu esta mensagem, o alerta está funcionando.",
+        forcar=True
+    )
+
+    if ok:
+        return jsonify({"ok": True, "status": "mensagem enviada"})
+
+    return jsonify({
+        "ok": False,
+        "erro": "Falha ao enviar. Confira TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no Railway e faça Redeploy."
+    }), 500
 
 
 # 🛑 PARAR
