@@ -52,7 +52,7 @@ BATCH_SIZE = 10
 # 🔥 REGRA MDL: abaixo deste saldo no fornecedor, fica ESGOTADO no Woo
 ESTOQUE_MINIMO_WOO = 10
 # 🔥 Versão da regra para forçar reprocessamento do cache quando mudar regra
-VERSAO_REGRA_ESTOQUE = "min10_v4_galeria_sem_duplicar"
+VERSAO_REGRA_ESTOQUE = "min10_v3_fora_fornecedor_img_dedup_v5"
 
 # 🔒 Segurança: só marca produtos fora do fornecedor se a lista vier com tamanho mínimo
 # Evita zerar produtos por falha temporária/API retornando lista incompleta
@@ -97,17 +97,7 @@ def estoque_woo_por_regra(saldo_fornecedor):
 
 def gerar_hash(prod):
     estoque_woo = estoque_woo_por_regra(prod.get('stock', 0))
-    # Inclui as URLs das imagens no hash para forçar correção quando a galeria mudar
-    urls = []
-    for img in prod.get("imagens", []):
-        if isinstance(img, dict):
-            src = img.get("src")
-        else:
-            src = img
-        if src:
-            urls.append(str(src))
-    imagens_hash = "|".join(urls)
-    return f"{VERSAO_REGRA_ESTOQUE}-{prod['price']}-{prod.get('stock',0)}-{estoque_woo}-{imagens_hash}"
+    return f"{VERSAO_REGRA_ESTOQUE}-{prod['price']}-{prod.get('stock',0)}-{estoque_woo}-{len(prod['imagens'])}"
 
 # 🔥 NOVA FUNÇÃO (ULTRA PERFORMANCE)
 def gerar_hash_lista(item):
@@ -262,36 +252,33 @@ def upload_imagem_wp(url, sku):
 
 def normalizar_url_imagem(valor):
     """
-    O fornecedor às vezes retorna imagem como string, lista, dict ou None.
-    Esta função transforma somente valores válidos em URL de imagem para o Woo.
+    Normaliza imagens do fornecedor sem multiplicar galeria.
 
-    Correção MDL:
-    - Se vier caminho relativo tipo Catalogo/600_/arquivo.JPG, monta URL correta.
-    - Se vier files/Catalogo/600_/arquivo.JPG, monta URL correta.
-    - Se vier só o nome do arquivo, prefixa /files/Catalogo/600_/.
+    Correção MDL V5:
+    - Quando o fornecedor manda a mesma foto em tamanhos diferentes
+      (grande/media/pequena ou 600_/300_/100_), usamos APENAS uma versão.
+    - Preferência: grande/600_ > media/300_ > pequena/100_.
     - Evita duplicar /Catalogo/600_/Catalogo/600_/.
+    - Retorna sempre lista de URLs strings.
     """
     if valor is None:
         return []
 
-    urls = []
-
     if isinstance(valor, list):
+        urls = []
         for item in valor:
             urls.extend(normalizar_url_imagem(item))
         return urls
 
     if isinstance(valor, dict):
-        # tenta chaves mais comuns primeiro, depois varre tudo
-        for chave in ["src", "url", "grande", "media", "pequena", "arquivo", "nome", "imagem"]:
-            if chave in valor:
-                urls.extend(normalizar_url_imagem(valor.get(chave)))
-
-        if not urls:
-            for item in valor.values():
-                urls.extend(normalizar_url_imagem(item))
-
-        return urls
+        # IMPORTANTE: não varrer todas as chaves, senão pega grande+media+pequena
+        # e triplica as imagens no Woo. Usa só a melhor disponível.
+        for chave in ["grande", "src", "url", "media", "pequena", "arquivo", "nome", "imagem"]:
+            if chave in valor and valor.get(chave):
+                urls = normalizar_url_imagem(valor.get(chave))
+                if urls:
+                    return urls
+        return []
 
     if not isinstance(valor, str):
         return []
@@ -301,22 +288,24 @@ def normalizar_url_imagem(valor):
     if not src or src.lower() in ["none", "null", "undefined", "false"]:
         return []
 
-    # remove barras iniciais para tratar caminhos relativos
+    # Se vier uma URL de 100_ ou 300_, tenta priorizar 600_ para não mandar 3 tamanhos.
+    src = re.sub(r"/Catalogo/(100_|300_)/", "/Catalogo/600_/", src, flags=re.IGNORECASE)
+
+    # Evita duplicação de caminho gerada por retorno estranho.
+    src = src.replace("/Catalogo/600_/Catalogo/600_/", "/Catalogo/600_/")
+    src = src.replace("Catalogo/600_/Catalogo/600_/", "Catalogo/600_/")
+
     src_limpo = src.lstrip("/")
 
-    # URL completa já pronta
     if src.startswith("http://") or src.startswith("https://"):
         return [src]
 
-    # caminho relativo completo do fornecedor: files/Catalogo/600_/arquivo.JPG
     if src_limpo.lower().startswith("files/catalogo/"):
         return [BASE + "/" + src_limpo]
 
-    # caminho relativo sem /files: Catalogo/600_/arquivo.JPG
     if src_limpo.lower().startswith("catalogo/"):
         return [BASE + "/files/" + src_limpo]
 
-    # somente nome do arquivo da imagem, exemplo: 1363.1.1.1.JPG
     if re.search(r"\.(jpg|jpeg|png|webp)$", src_limpo, re.IGNORECASE):
         return [f"{BASE}/files/Catalogo/600_/{src_limpo}"]
 
@@ -331,73 +320,38 @@ def url_imagem_existe(url):
     except Exception:
         return False
 
-def normalizar_para_imagem_600(url):
-    """
-    Força imagem principal em 600_.
-    O fornecedor às vezes retorna a mesma foto em 100_, 300_ e 600_.
-    Se enviarmos as 3 para o Woo, a galeria triplica.
-    """
-    if not url or not isinstance(url, str):
-        return None
-
-    url = url.strip().replace("\\", "/")
-    if not url.startswith("http"):
-        return None
-
-    url = re.sub(r"/Catalogo/(100_|300_|1500_)/", "/Catalogo/600_/", url, flags=re.IGNORECASE)
-    return url
-
-
-def chave_imagem_fornecedor(url):
-    """
-    Cria uma chave única para a foto, ignorando o tamanho da pasta.
-    Exemplo:
-    /600_/76393.3.4.1.JPG e /300_/76393.3.4.1.JPG = mesma imagem.
-    """
-    if not url:
-        return None
-
-    url = normalizar_para_imagem_600(url) or url
-    nome = url.split("/")[-1].lower()
-    nome = re.sub(r"\.(jpg|jpeg|png|webp)$", "", nome, flags=re.IGNORECASE)
-    return nome
-
-
 def coletar_imagens_detalhe(detalhe, sku):
     """
-    Coleta imagens reais do retorno do fornecedor sem triplicar galeria.
-    Regra:
-    - normaliza tudo para /Catalogo/600_/
-    - remove duplicadas mantendo a ordem
-    - usa fallback SKU.1.JPG apenas se o fornecedor não trouxer nenhuma imagem válida
+    Coleta imagens reais do fornecedor sem repetir tamanhos.
+
+    Regra: cada foto do fornecedor vira no máximo 1 imagem no Woo.
+    Se a foto vier em 600_/300_/100_, fica somente a versão 600_.
     """
     urls = []
 
     fotos = detalhe.get("fotos", {}) if isinstance(detalhe, dict) else {}
     imagens_raw = fotos.get("imagem", []) if isinstance(fotos, dict) else []
 
-    for url in normalizar_url_imagem(imagens_raw):
-        url_600 = normalizar_para_imagem_600(url)
-        if url_600:
-            urls.append(url_600)
+    urls.extend(normalizar_url_imagem(imagens_raw))
 
-    # Remove duplicadas mantendo ordem.
-    # A chave ignora tamanho de pasta, evitando 100_/300_/600_ da mesma foto.
     urls_unicas = []
-    chaves_usadas = set()
+    vistos = set()
 
     for url in urls:
-        chave = chave_imagem_fornecedor(url)
-        if not chave or chave in chaves_usadas:
+        if not url or not isinstance(url, str):
             continue
 
-        # Só manda para o Woo se a URL final existir.
-        if url_imagem_existe(url):
-            urls_unicas.append(url)
-            chaves_usadas.add(chave)
+        # Normaliza para 600_ para comparar e evitar 600/300/100 da mesma foto.
+        url_norm = re.sub(r"/Catalogo/(100_|300_)/", "/Catalogo/600_/", url, flags=re.IGNORECASE)
+        url_norm = url_norm.replace("/Catalogo/600_/Catalogo/600_/", "/Catalogo/600_/")
 
-    # Se o fornecedor vier estranho/None, tenta pelo padrão confirmado:
-    # https://portal.juntossomosimbativeis.com.br/files/Catalogo/600_/1363.1.1.1.JPG
+        chave = url_norm.lower()
+        if chave in vistos:
+            continue
+
+        vistos.add(chave)
+        urls_unicas.append(url_norm)
+
     if not urls_unicas:
         fallback = f"{BASE}/files/Catalogo/600_/{sku}.1.JPG"
         if url_imagem_existe(fallback):
@@ -406,6 +360,7 @@ def coletar_imagens_detalhe(detalhe, sku):
             log(f"⚠️ {sku} sem imagem válida no fornecedor")
 
     return [{"src": url} for url in urls_unicas]
+
 
 # ================= MAPAS =================
 
@@ -841,7 +796,7 @@ def enviar(prod, cache):
     estoque_fornecedor = int(prod.get("stock", 0))
     estoque_novo = estoque_woo_por_regra(estoque_fornecedor)
     stock_status_novo = "instock" if estoque_novo > 0 else "outofstock"
-    imagens_novas = len(prod["imagens"])  # será recalculado após validar/deduplicar imagens
+    imagens_novas = len(prod["imagens"])
 
     cat_depto_id = get_or_create_category(prod["departamento"]) if prod["departamento"] else None
     cat_sub_id = get_or_create_category(prod["categoria"]) if prod["categoria"] else None
@@ -885,27 +840,8 @@ def enviar(prod, cache):
             imagens_sem_duplicar.append(img)
             urls_ja_usadas.add(src)
     imagens_upload = imagens_sem_duplicar
+
     imagens_novas = len(imagens_upload)
-
-    # Galeria atual do Woo normalizada para comparar com a galeria do fornecedor.
-    imagens_woo_atual = []
-    if prod_woo:
-        for img_woo in prod_woo.get("images", []) or []:
-            src_woo = img_woo.get("src") if isinstance(img_woo, dict) else None
-            src_woo_norm = normalizar_para_imagem_600(src_woo)
-            if src_woo_norm:
-                imagens_woo_atual.append(src_woo_norm)
-
-    imagens_woo_atual_sem_dup = []
-    chaves_woo = set()
-    for url in imagens_woo_atual:
-        chave = chave_imagem_fornecedor(url)
-        if chave and chave not in chaves_woo:
-            imagens_woo_atual_sem_dup.append(url)
-            chaves_woo.add(chave)
-
-    imagens_fornecedor_urls = [img.get("src") for img in imagens_upload if isinstance(img, dict) and img.get("src")]
-    galeria_mudou = imagens_fornecedor_urls != imagens_woo_atual_sem_dup
 
     if not imagens_upload:
         log(f"⚠️ {prod['sku']} sem imagem válida para enviar ao Woo")
@@ -925,11 +861,12 @@ def enviar(prod, cache):
         "attributes": prod["atributos"]
     }
 
-    # 🔥 Imagens:
-    # - Produto novo: envia imagens obrigatoriamente.
-    # - Produto existente: substitui a galeria quando mudou ou quando a galeria antiga está multiplicada.
-    # Isso corrige casos como 5 → 15, 7 → 21, 14 → 42.
-    if imagens_upload and (not prod_id or galeria_mudou):
+    # 🔥 GALERIA DEFINITIVA
+    # Produto novo: envia imagens obrigatoriamente.
+    # Produto existente: se a quantidade no Woo estiver diferente da quantidade real do fornecedor,
+    # envia a galeria completa para substituir e limpar duplicadas antigas.
+    # Isso corrige casos como 5 → 15, 3 → 9, 14 → 42.
+    if imagens_upload and (not prod_id or imagens_antigas != imagens_novas):
         payload["images"] = imagens_upload
 
     # MDL: produto novo sem imagem válida não será criado, para não poluir o site com produto sem foto.
