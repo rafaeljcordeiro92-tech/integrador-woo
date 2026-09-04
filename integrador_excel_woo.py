@@ -92,10 +92,13 @@ MIN_ITENS_FORNECEDOR_PARA_CONFERENCIA = 100
 
 # ⏱️ BLINDAGEM CONTRA TRAVAMENTO NO RAILWAY
 # Evita a execução ficar presa em 99% por request sem resposta ou thread travada.
-REQUEST_TIMEOUT = 35
+REQUEST_TIMEOUT = 45
 VERIFY_SSL_WOO = False  # 🔒 desativa validação SSL nas chamadas do WooCommerce
 ITEM_TIMEOUT = 0  # desativado: não cancela lote inteiro por tempo de item
 EXECUCAO_MAX_SEGUNDOS = 3600  # 60 minutos de segurança
+INTERVALO_AUTOMATICO = 600  # 10 minutos entre o fim de um ciclo e o próximo
+WOO_MAX_TENTATIVAS = 3
+WOO_BACKOFF_BASE = 2
 
 # ================= CONFIG =================
 
@@ -169,28 +172,41 @@ def get_wp_headers():
     }
 
 
-# ================= WOO REQUESTS COM SSL DESATIVADO =================
-def woo_get(url, **kwargs):
+# ================= WOO REQUESTS COM RETRY + BACKOFF =================
+def woo_request(method, url, **kwargs):
+    """Retry controlado para timeout/5xx/429 sem martelar o WordPress."""
     kwargs.setdefault("timeout", REQUEST_TIMEOUT)
     kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.get(url, **kwargs)
+    ultimo_erro = None
+
+    for tentativa in range(1, WOO_MAX_TENTATIVAS + 1):
+        try:
+            r = requests.request(method, url, **kwargs)
+            if r.status_code not in (429, 500, 502, 503, 504):
+                return r
+            ultimo_erro = RuntimeError(f"HTTP {r.status_code}: {r.text[:160]}")
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            ultimo_erro = e
+
+        if tentativa < WOO_MAX_TENTATIVAS:
+            espera = WOO_BACKOFF_BASE ** (tentativa - 1) + random.uniform(0.2, 0.8)
+            time.sleep(espera)
+
+    raise RuntimeError(f"Woo indisponível após {WOO_MAX_TENTATIVAS} tentativas: {ultimo_erro}")
+
+def woo_get(url, **kwargs):
+    return woo_request("GET", url, **kwargs)
 
 def woo_post(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.post(url, **kwargs)
+    return woo_request("POST", url, **kwargs)
 
 def woo_put(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.put(url, **kwargs)
+    return woo_request("PUT", url, **kwargs)
 
 def woo_delete(url, **kwargs):
-    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
-    kwargs.setdefault("verify", VERIFY_SSL_WOO)
-    return requests.delete(url, **kwargs)
+    return woo_request("DELETE", url, **kwargs)
 
-MAX_WORKERS = 4
+MAX_WORKERS = 2  # RC: reduz pressão simultânea sobre o WooCommerce
 
 # ================= TELEGRAM ALERTAS =================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -503,12 +519,24 @@ STATUS = {
 LOGS = []
 LOG_ATUALIZADOS = []
 LOG_CRIADOS = []
+ERROS_CICLO_DETALHES = []
+
+RESUMO_DIA = {
+    "data": agora_brasilia().strftime("%Y-%m-%d"),
+    "ciclos": 0, "processados": 0, "atualizados": 0, "criados": 0, "erros": 0
+}
+ULTIMO_RELATORIO_TELEGRAM = None
 
 def log(msg):
     print(msg)
     LOGS.append(f"{agora_brasilia().strftime('%Y-%m-%d %H:%M:%S')} - {msg}")
     if len(LOGS) > 300:
         LOGS.pop(0)
+
+    if str(msg).strip().startswith("❌"):
+        ERROS_CICLO_DETALHES.append(str(msg)[:500])
+        if len(ERROS_CICLO_DETALHES) > 100:
+            del ERROS_CICLO_DETALHES[0]
 
     # Telegram: envia alerta somente para erros críticos, com trava anti-spam.
     try:
@@ -518,6 +546,8 @@ def log(msg):
         print(f"⚠️ falha alerta Telegram no log: {e}")
 
 # ================= WOO EXTRA =================
+
+WOO_LOOKUP_ERROR = object()
 
 def get_produto_woo(sku):
     try:
@@ -542,7 +572,7 @@ def get_produto_woo(sku):
 
     except Exception as e:
         log(f"❌ erro get produto {sku}: {e}")
-        return None
+        return WOO_LOOKUP_ERROR
 
 def deletar_produto_woo(prod_id, sku):
     try:
@@ -793,16 +823,24 @@ def enviar(prod, cache):
 
     if hash_antigo == hash_atual:
         log(f"⏭️ sem alteração: {prod['sku']}")
-        return
+        return True
 
     if deve_bloquear(prod["name"]):
         prod_woo = get_produto_woo(prod["sku"])
+        if prod_woo is WOO_LOOKUP_ERROR:
+            STATUS["erros"] += 1
+            return False
         if prod_woo:
             deletar_produto_woo(prod_woo["id"], prod["sku"])
         log(f"🚫 bloqueado: {prod['sku']} - {prod['name']}")
         return
 
     prod_woo = get_produto_woo(prod["sku"])
+    if prod_woo is WOO_LOOKUP_ERROR:
+        # CRÍTICO: timeout na consulta NÃO significa produto inexistente.
+        # Não cria duplicata e não grava cache; será tentado novamente no próximo ciclo.
+        STATUS["erros"] += 1
+        return False
     prod_id = prod_woo["id"] if prod_woo else None
 
     preco_antigo = prod_woo.get("regular_price") if prod_woo else "-"
@@ -883,14 +921,16 @@ def enviar(prod, cache):
     # MDL: produto novo sem imagem válida não será criado, para não poluir o site com produto sem foto.
     if not prod_id and not imagens_upload:
         log(f"🚫 não criado {prod['sku']} - sem imagem válida no fornecedor")
-        return
+        return False
 
     try:
         if prod_id:
             r = woo_put(f"{URL_WOO}/{prod_id}", headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
 
             if r.status_code not in [200, 201]:
+                STATUS["erros"] += 1
                 log(f"❌ erro update {prod['sku']} - {r.status_code} - {r.text[:200]}")
+                return False
             else:
                 STATUS["atualizados"] += 1
                 LOG_ATUALIZADOS.append(prod["sku"])
@@ -904,7 +944,9 @@ def enviar(prod, cache):
             r = woo_post(URL_WOO, headers=get_auth_headers(), json=payload, timeout=REQUEST_TIMEOUT)
 
             if r.status_code not in [200, 201]:
+                STATUS["erros"] += 1
                 log(f"❌ erro criar {prod['sku']} - {r.status_code} - {r.text[:200]}")
+                return False
             else:
                 STATUS["criados"] += 1
                 LOG_CRIADOS.append(prod["sku"])
@@ -914,12 +956,14 @@ def enviar(prod, cache):
                 else:
                     log(f"🆕 {prod['sku']} criado | 💰 {preco_novo} | 📦 {estoque_novo} | 🖼️ {imagens_novas}")
 
-        # 👇 MESMO NÍVEL DO IF/ELSE
+        # Só confirma cache depois que o Woo respondeu com sucesso.
         cache[prod["sku"]] = hash_atual
+        return True
 
     except Exception as e:
         STATUS["erros"] += 1
         log(f"❌ erro {prod['sku']} {e}")
+        return False
 
 
 # ================= EXECUTAR =================
@@ -938,6 +982,8 @@ def executar():
         return
 
     cache = carregar_cache()
+
+    ERROS_CICLO_DETALHES.clear()
 
     STATUS.update({
         "rodando": True,
@@ -1083,8 +1129,6 @@ def executar():
 
                 enviar(prod, cache)
 
-                cache[sku] = hash_atual
-
                 tempo_execucao = time.time() - STATUS["inicio"]
 
                 if tempo_execucao > 0:
@@ -1167,7 +1211,18 @@ def executar():
         STATUS["rodando"] = False
         STATUS["tempo_restante"] = 0
 
+        # Acumula números do dia para o relatório das 23h.
+        atualizar_resumo_dia()
+
         if erros_ciclo and erros_ciclo > 0:
+            unicos = []
+            for erro in ERROS_CICLO_DETALHES:
+                if erro not in unicos:
+                    unicos.append(erro)
+            detalhes = "\n".join(f"• {e[:260]}" for e in unicos[:6])
+            if len(unicos) > 6:
+                detalhes += f"\n• ... +{len(unicos)-6} tipos/detalhes"
+
             enviar_telegram(
                 "⚠️ <b>Integrador Woo MDL finalizou com erros</b>\n\n"
                 f"🕒 {agora_brasilia().strftime('%d/%m/%Y %H:%M:%S')}\n"
@@ -1175,11 +1230,48 @@ def executar():
                 f"📦 Processados: {STATUS.get('processados', 0)} / {STATUS.get('total', 0)}\n"
                 f"♻️ Atualizados: {STATUS.get('atualizados', 0)}\n"
                 f"🆕 Criados: {STATUS.get('criados', 0)}\n\n"
+                f"<b>Principais erros:</b>\n{detalhes or 'Sem detalhe disponível'}\n\n"
+                "🔁 Itens que falharam não são confirmados no cache e serão tentados novamente.\n"
                 "🔗 Painel: https://integrador-woo-production.up.railway.app",
                 forcar=True
             )
 
         log("✅ finalizado")
+
+# ================= RESUMO DIÁRIO TELEGRAM =================
+def atualizar_resumo_dia():
+    global RESUMO_DIA
+    hoje = agora_brasilia().strftime("%Y-%m-%d")
+    if RESUMO_DIA.get("data") != hoje:
+        RESUMO_DIA = {"data": hoje, "ciclos": 0, "processados": 0, "atualizados": 0, "criados": 0, "erros": 0}
+    RESUMO_DIA["ciclos"] += 1
+    RESUMO_DIA["processados"] += int(STATUS.get("processados", 0) or 0)
+    RESUMO_DIA["atualizados"] += int(STATUS.get("atualizados", 0) or 0)
+    RESUMO_DIA["criados"] += int(STATUS.get("criados", 0) or 0)
+    RESUMO_DIA["erros"] += int(STATUS.get("erros", 0) or 0)
+
+def loop_relatorio_diario():
+    global ULTIMO_RELATORIO_TELEGRAM
+    while True:
+        try:
+            agora = agora_brasilia()
+            data = agora.strftime("%Y-%m-%d")
+            if agora.hour >= 23 and ULTIMO_RELATORIO_TELEGRAM != data:
+                enviar_telegram(
+                    "📊 <b>Relatório diário - Integrador Woo MDL</b>\n\n"
+                    f"📅 {agora.strftime('%d/%m/%Y')}\n"
+                    f"🔄 Ciclos: {RESUMO_DIA.get('ciclos', 0)}\n"
+                    f"📦 Processados: {RESUMO_DIA.get('processados', 0)}\n"
+                    f"♻️ Atualizados: {RESUMO_DIA.get('atualizados', 0)}\n"
+                    f"🆕 Criados: {RESUMO_DIA.get('criados', 0)}\n"
+                    f"❌ Erros: {RESUMO_DIA.get('erros', 0)}\n\n"
+                    "🔗 Painel: https://integrador-woo-production.up.railway.app",
+                    forcar=True
+                )
+                ULTIMO_RELATORIO_TELEGRAM = data
+        except Exception as e:
+            print(f"⚠️ erro no relatório diário Telegram: {e}")
+        time.sleep(30)
 
 # ================= ROTAS =================
 
@@ -1265,6 +1357,18 @@ document.addEventListener("DOMContentLoaded", function () {
 @app.route("/status")
 def status():
     return jsonify(STATUS)
+
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "rodando": STATUS.get("rodando", False),
+        "processados": STATUS.get("processados", 0),
+        "total": STATUS.get("total", 0),
+        "erros": STATUS.get("erros", 0),
+        "hora_brasilia": agora_brasilia().strftime("%d/%m/%Y %H:%M:%S")
+    })
 
 
 @app.route("/hora")
@@ -1367,8 +1471,8 @@ def loop_automatico():
             log("🔄 execução automática iniciando...")
             executar()
 
-        tempo = 1200  # 20 minutos fixo
-        log(f"⏳ aguardando {tempo}s (20 minutos)...")
+        tempo = INTERVALO_AUTOMATICO
+        log(f"⏳ aguardando {tempo}s (10 minutos)...")
         time.sleep(tempo)
 
 
@@ -1381,6 +1485,7 @@ def iniciar_loop():
 
     log("🚀 iniciando loop automático...")
     threading.Thread(target=loop_automatico, daemon=True).start()
+    threading.Thread(target=loop_relatorio_diario, daemon=True).start()
 
 
 # 👇 ESSENCIAL: inicia automaticamente no Railway (Gunicorn)
