@@ -26,7 +26,7 @@ session.verify = False
 
 app = Flask(__name__)
 
-VERSAO_INTEGRADOR = "RC_10MIN_CATCACHE_CIRCUIT_20260904"
+VERSAO_INTEGRADOR = "RC_DIAGNOSTICO_RAILWAY_FIX1_20260904"
 
 # 🇧🇷 HORÁRIO DE BRASÍLIA
 BR_TZ = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
@@ -1583,9 +1583,11 @@ def health():
 def diagnostico_woo():
     """
     Diagnóstico SOMENTE LEITURA executado de dentro do Railway.
-    Mede DNS e tempo de resposta do site, REST API e Woo autenticado.
+    Esta versão é blindada: qualquer erro é devolvido em JSON e a rota não deve gerar HTTP 500.
     Não cria, altera nem exclui produtos.
     """
+    inicio_geral = time.time()
+
     resultado = {
         "ok": True,
         "somente_leitura": True,
@@ -1596,76 +1598,205 @@ def diagnostico_woo():
         "testes": []
     }
 
-    inicio_dns = time.time()
     try:
-        infos = socket.getaddrinfo("moveisdolar.com.br", 443, type=socket.SOCK_STREAM)
-        ips = []
-        for info in infos:
-            ip = info[4][0]
-            if ip not in ips:
-                ips.append(ip)
-        resultado["dns"] = {
-            "ok": True,
-            "tempo_s": round(time.time() - inicio_dns, 3),
-            "ips": ips
-        }
-    except Exception as e:
-        resultado["dns"] = {
-            "ok": False,
-            "tempo_s": round(time.time() - inicio_dns, 3),
-            "erro_tipo": type(e).__name__,
-            "erro": str(e)[:500]
-        }
-        resultado["ok"] = False
-
-    def testar(nome, url, autenticado=False, timeout=20):
-        inicio = time.time()
-        item = {
-            "nome": nome,
-            "url": url,
-            "autenticado": bool(autenticado),
-            "timeout_s": timeout
-        }
+        # DNS
+        inicio_dns = time.time()
         try:
-            headers = get_auth_headers() if autenticado else {"User-Agent": "MDL-Woo-Diagnostico/1.0"}
-            kwargs = {
-                "headers": headers,
-                "timeout": timeout,
-                "verify": VERIFY_SSL_WOO,
-                "allow_redirects": True,
+            infos = socket.getaddrinfo(
+                "moveisdolar.com.br",
+                443,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM
+            )
+            ips = []
+            for info in infos:
+                try:
+                    ip = str(info[4][0])
+                    if ip not in ips:
+                        ips.append(ip)
+                except Exception:
+                    pass
+
+            resultado["dns"] = {
+                "ok": True,
+                "tempo_s": round(time.time() - inicio_dns, 3),
+                "ips": ips
             }
-            if url == URL_WOO:
-                kwargs["params"] = {"per_page": 1}
-            r = requests.get(url, **kwargs)
-            item.update({
-                "ok_transporte": True,
-                "http": r.status_code,
-                "tempo_s": round(time.time() - inicio, 3),
-                "bytes": len(r.content or b""),
-                "server": r.headers.get("Server"),
-                "via": r.headers.get("Via"),
-                "cf_ray": r.headers.get("CF-RAY")
-            })
         except Exception as e:
-            item.update({
-                "ok_transporte": False,
-                "tempo_s": round(time.time() - inicio, 3),
+            resultado["dns"] = {
+                "ok": False,
+                "tempo_s": round(time.time() - inicio_dns, 3),
                 "erro_tipo": type(e).__name__,
                 "erro": str(e)[:800]
-            })
+            }
             resultado["ok"] = False
-        resultado["testes"].append(item)
 
-    testar("home", "https://moveisdolar.com.br/", autenticado=False, timeout=20)
-    testar("wp_json", "https://moveisdolar.com.br/wp-json/", autenticado=False, timeout=20)
-    testar("woo_produtos_per_page_1", URL_WOO, autenticado=True, timeout=20)
-    testar("woo_produto_144", f"{URL_WOO}/144", autenticado=True, timeout=20)
+        def testar(nome, url, autenticado=False, timeout=15, params=None):
+            inicio = time.time()
 
-    tempos = [x.get("tempo_s") for x in resultado["testes"] if isinstance(x.get("tempo_s"), (int, float))]
-    if tempos:
-        resultado["tempo_total_testes_s"] = round(sum(tempos), 3)
+            item = {
+                "nome": str(nome),
+                "url": str(url),
+                "autenticado": bool(autenticado),
+                "timeout_s": int(timeout)
+            }
 
-    return jsonify(resultado)
+            try:
+                headers = (
+                    get_auth_headers()
+                    if autenticado
+                    else {"User-Agent": "MDL-Woo-Diagnostico/1.1"}
+                )
+
+                r = requests.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    timeout=(8, timeout),
+                    verify=VERIFY_SSL_WOO,
+                    allow_redirects=True
+                )
+
+                item.update({
+                    "ok_transporte": True,
+                    "http": int(r.status_code),
+                    "tempo_s": round(time.time() - inicio, 3),
+                    "bytes": int(len(r.content or b"")),
+                    "server": str(r.headers.get("Server") or ""),
+                    "via": str(r.headers.get("Via") or ""),
+                    "cf_ray": str(r.headers.get("CF-RAY") or ""),
+                    "content_type": str(r.headers.get("Content-Type") or "")
+                })
+
+                # Não expõe corpo completo, chaves ou dados sensíveis.
+                if r.status_code >= 400:
+                    try:
+                        item["resposta_inicio"] = str(r.text[:300])
+                    except Exception:
+                        pass
+
+            except requests.exceptions.ConnectTimeout as e:
+                item.update({
+                    "ok_transporte": False,
+                    "tempo_s": round(time.time() - inicio, 3),
+                    "erro_tipo": "ConnectTimeout",
+                    "erro": str(e)[:1000]
+                })
+                resultado["ok"] = False
+
+            except requests.exceptions.ReadTimeout as e:
+                item.update({
+                    "ok_transporte": False,
+                    "tempo_s": round(time.time() - inicio, 3),
+                    "erro_tipo": "ReadTimeout",
+                    "erro": str(e)[:1000]
+                })
+                resultado["ok"] = False
+
+            except requests.exceptions.SSLError as e:
+                item.update({
+                    "ok_transporte": False,
+                    "tempo_s": round(time.time() - inicio, 3),
+                    "erro_tipo": "SSLError",
+                    "erro": str(e)[:1000]
+                })
+                resultado["ok"] = False
+
+            except requests.exceptions.RequestException as e:
+                item.update({
+                    "ok_transporte": False,
+                    "tempo_s": round(time.time() - inicio, 3),
+                    "erro_tipo": type(e).__name__,
+                    "erro": str(e)[:1000]
+                })
+                resultado["ok"] = False
+
+            except Exception as e:
+                item.update({
+                    "ok_transporte": False,
+                    "tempo_s": round(time.time() - inicio, 3),
+                    "erro_tipo": type(e).__name__,
+                    "erro": str(e)[:1000]
+                })
+                resultado["ok"] = False
+
+            resultado["testes"].append(item)
+
+        # Testes sequenciais e somente leitura.
+        testar(
+            "home",
+            "https://moveisdolar.com.br/",
+            autenticado=False,
+            timeout=12
+        )
+
+        testar(
+            "wp_json",
+            "https://moveisdolar.com.br/wp-json/",
+            autenticado=False,
+            timeout=12
+        )
+
+        testar(
+            "woo_produtos_per_page_1",
+            URL_WOO,
+            autenticado=True,
+            timeout=15,
+            params={"per_page": 1}
+        )
+
+        testar(
+            "woo_produto_144",
+            f"{URL_WOO}/144",
+            autenticado=True,
+            timeout=15
+        )
+
+        resultado["tempo_total_s"] = round(time.time() - inicio_geral, 3)
+
+    except Exception as e:
+        # Blindagem final da rota.
+        resultado["ok"] = False
+        resultado["erro_rota_tipo"] = type(e).__name__
+        resultado["erro_rota"] = str(e)[:1500]
+        resultado["tempo_total_s"] = round(time.time() - inicio_geral, 3)
+
+    try:
+        body = json.dumps(
+            resultado,
+            ensure_ascii=False,
+            indent=2,
+            default=str
+        )
+        return Response(body, status=200, mimetype="application/json")
+    except Exception as e:
+        fallback = {
+            "ok": False,
+            "somente_leitura": True,
+            "erro_tipo": type(e).__name__,
+            "erro": str(e)[:1000]
+        }
+        return Response(
+            json.dumps(fallback, ensure_ascii=False, default=str),
+            status=200,
+            mimetype="application/json"
+        )
+
+
+@app.route("/diagnostico-woo-ping")
+def diagnostico_woo_ping():
+    """Confirma que a rota de diagnóstico foi carregada no Railway."""
+    return Response(
+        json.dumps({
+            "ok": True,
+            "rota": "diagnostico-woo-ping",
+            "versao": VERSAO_INTEGRADOR,
+            "hora_brasilia": agora_brasilia().strftime("%d/%m/%Y %H:%M:%S")
+        }, ensure_ascii=False, default=str),
+        status=200,
+        mimetype="application/json"
+    )
+
 
 @app.route("/hora")
 def hora():
