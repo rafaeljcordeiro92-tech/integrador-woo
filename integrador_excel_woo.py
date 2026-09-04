@@ -15,7 +15,7 @@ try:
 except Exception:
     ZoneInfo = None
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from flask import Flask, jsonify, send_from_directory, Response
+from flask import Flask, jsonify, send_from_directory, Response, request
 
 # 🔒 DESATIVA WARNING DE SSL (FORNECEDOR COM CERTIFICADO VENCIDO)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -26,7 +26,7 @@ session.verify = False
 
 app = Flask(__name__)
 
-VERSAO_INTEGRADOR = "RC_DIAGNOSTICO_RAILWAY_FIX2_20260904"
+VERSAO_INTEGRADOR = "RC_DIAGNOSTICO_RAILWAY_FIX3_20260904"
 
 # 🇧🇷 HORÁRIO DE BRASÍLIA
 BR_TZ = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
