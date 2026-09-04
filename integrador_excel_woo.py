@@ -25,6 +25,8 @@ session.verify = False
 
 app = Flask(__name__)
 
+VERSAO_INTEGRADOR = "RC_10MIN_CATCACHE_CIRCUIT_20260904"
+
 # 🇧🇷 HORÁRIO DE BRASÍLIA
 BR_TZ = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
 try:
@@ -100,6 +102,27 @@ INTERVALO_AUTOMATICO = 600  # 10 minutos entre o fim de um ciclo e o próximo
 WOO_MAX_TENTATIVAS = 3
 WOO_BACKOFF_BASE = 2
 
+# 🛡️ Circuit breaker Woo: se o servidor começar a falhar em sequência,
+# para de martelar o WordPress por alguns segundos antes de tentar novamente.
+WOO_CIRCUIT_LIMITE_FALHAS = 3
+WOO_CIRCUIT_PAUSA = 60
+WOO_SLOW_REQUEST_SEGUNDOS = 8
+WOO_CATEGORIA_TIMEOUT = 20  # categorias devem ser leves; se demorarem, segue sem recategorizar existentes
+
+_WOO_CIRCUIT_LOCK = threading.Lock()
+_WOO_CIRCUIT_FALHAS = 0
+_WOO_CIRCUIT_ABERTO_ATE = 0.0
+_WOO_CIRCUIT_AVISO_ABERTO = False
+
+WOO_STATS = {
+    "requests": 0,
+    "sucessos": 0,
+    "falhas": 0,
+    "lentas": 0,
+    "tempo_total": 0.0,
+    "tempo_max": 0.0,
+}
+
 # ================= CONFIG =================
 
 CACHE_FILE = "cache_produtos.json"
@@ -172,21 +195,96 @@ def get_wp_headers():
     }
 
 
-# ================= WOO REQUESTS COM RETRY + BACKOFF =================
+# ================= WOO REQUESTS COM RETRY + BACKOFF + CIRCUIT BREAKER =================
+def reset_woo_stats():
+    with _WOO_CIRCUIT_LOCK:
+        WOO_STATS.update({
+            "requests": 0, "sucessos": 0, "falhas": 0,
+            "lentas": 0, "tempo_total": 0.0, "tempo_max": 0.0
+        })
+
+
+def registrar_woo_stats(duracao, sucesso):
+    with _WOO_CIRCUIT_LOCK:
+        WOO_STATS["requests"] += 1
+        WOO_STATS["tempo_total"] += float(duracao)
+        WOO_STATS["tempo_max"] = max(WOO_STATS["tempo_max"], float(duracao))
+        if duracao >= WOO_SLOW_REQUEST_SEGUNDOS:
+            WOO_STATS["lentas"] += 1
+        if sucesso:
+            WOO_STATS["sucessos"] += 1
+        else:
+            WOO_STATS["falhas"] += 1
+
+
+def aguardar_circuit_breaker_woo():
+    global _WOO_CIRCUIT_AVISO_ABERTO
+    while True:
+        with _WOO_CIRCUIT_LOCK:
+            restante = _WOO_CIRCUIT_ABERTO_ATE - time.time()
+            if restante <= 0:
+                if _WOO_CIRCUIT_AVISO_ABERTO:
+                    _WOO_CIRCUIT_AVISO_ABERTO = False
+                    log("🟢 Woo circuit breaker liberado; retomando chamadas.")
+                return
+        # Dorme em fatias pequenas para responder ao botão PARAR.
+        if PARAR:
+            raise RuntimeError("Execução interrompida durante pausa do Woo")
+        time.sleep(min(2.0, max(0.2, restante)))
+
+
+def woo_registrar_sucesso():
+    global _WOO_CIRCUIT_FALHAS
+    with _WOO_CIRCUIT_LOCK:
+        _WOO_CIRCUIT_FALHAS = 0
+
+
+def woo_registrar_falha():
+    global _WOO_CIRCUIT_FALHAS, _WOO_CIRCUIT_ABERTO_ATE, _WOO_CIRCUIT_AVISO_ABERTO
+    abriu = False
+    with _WOO_CIRCUIT_LOCK:
+        _WOO_CIRCUIT_FALHAS += 1
+        if _WOO_CIRCUIT_FALHAS >= WOO_CIRCUIT_LIMITE_FALHAS:
+            novo_ate = time.time() + WOO_CIRCUIT_PAUSA
+            if novo_ate > _WOO_CIRCUIT_ABERTO_ATE:
+                _WOO_CIRCUIT_ABERTO_ATE = novo_ate
+            if not _WOO_CIRCUIT_AVISO_ABERTO:
+                _WOO_CIRCUIT_AVISO_ABERTO = True
+                abriu = True
+    if abriu:
+        log(f"🛡️ Woo instável: {WOO_CIRCUIT_LIMITE_FALHAS} falhas seguidas. Pausando chamadas por {WOO_CIRCUIT_PAUSA}s para aliviar o WordPress.")
+
+
 def woo_request(method, url, **kwargs):
-    """Retry controlado para timeout/5xx/429 sem martelar o WordPress."""
+    """Retry controlado + backoff + circuit breaker para não sobrecarregar o Woo."""
     kwargs.setdefault("timeout", REQUEST_TIMEOUT)
     kwargs.setdefault("verify", VERIFY_SSL_WOO)
     ultimo_erro = None
 
     for tentativa in range(1, WOO_MAX_TENTATIVAS + 1):
+        aguardar_circuit_breaker_woo()
+        inicio_req = time.time()
         try:
             r = requests.request(method, url, **kwargs)
-            if r.status_code not in (429, 500, 502, 503, 504):
+            duracao = time.time() - inicio_req
+            sucesso_transporte = r.status_code not in (429, 500, 502, 503, 504)
+            registrar_woo_stats(duracao, sucesso_transporte)
+
+            if duracao >= WOO_SLOW_REQUEST_SEGUNDOS:
+                log(f"🐢 Woo lento: {method.upper()} {url.split('/wp-json/')[-1][:90]} levou {duracao:.1f}s (HTTP {r.status_code})")
+
+            if sucesso_transporte:
+                woo_registrar_sucesso()
                 return r
+
             ultimo_erro = RuntimeError(f"HTTP {r.status_code}: {r.text[:160]}")
+            woo_registrar_falha()
+
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            duracao = time.time() - inicio_req
+            registrar_woo_stats(duracao, False)
             ultimo_erro = e
+            woo_registrar_falha()
 
         if tentativa < WOO_MAX_TENTATIVAS:
             espera = WOO_BACKOFF_BASE ** (tentativa - 1) + random.uniform(0.2, 0.8)
@@ -445,61 +543,137 @@ MAPA_SUBDEPARTAMENTOS = {
 # ================= CACHE CATEGORIAS =================
 
 CACHE_CATEGORIAS = {}
+CATEGORIAS_PRECARREGADAS_OK = False
+LOCK_CATEGORIAS = threading.Lock()
 
-def get_or_create_category(nome):
-    if nome in CACHE_CATEGORIAS:
-        return CACHE_CATEGORIAS[nome]
+def chave_categoria(nome):
+    return str(nome or "").strip().casefold()
+
+def carregar_categorias_woo():
+    """
+    Carrega TODAS as categorias do Woo uma única vez no início do ciclo.
+    Evita centenas de buscas ?search=... repetidas durante o processamento.
+    """
+    global CATEGORIAS_PRECARREGADAS_OK
+
+    inicio = time.time()
+    novas = {}
+    pagina = 1
 
     try:
-        # 🔥 GET categoria
-        r = woo_get(
-            URL_WOO_CAT,
-            headers=get_auth_headers(),
-            params={"search": nome},
-            timeout=REQUEST_TIMEOUT
-        )
+        while True:
+            r = woo_get(
+                URL_WOO_CAT,
+                headers=get_auth_headers(),
+                params={"per_page": 100, "page": pagina, "orderby": "id", "order": "asc"},
+                timeout=WOO_CATEGORIA_TIMEOUT
+            )
 
-        if r.status_code != 200:
-            log(f"❌ erro categoria {nome} - status {r.status_code} - {r.text[:100]}")
-            return None
+            if r.status_code != 200:
+                log(f"⚠️ pré-carga de categorias falhou - HTTP {r.status_code}: {r.text[:160]}")
+                CATEGORIAS_PRECARREGADAS_OK = False
+                return False
 
-        # 🔒 proteção JSON
-        try:
-            data = r.json()
-        except:
-            log(f"❌ resposta não JSON categoria {nome}: {r.text[:200]}")
-            return None
+            try:
+                data = r.json()
+            except Exception:
+                log(f"⚠️ pré-carga de categorias retornou JSON inválido: {r.text[:180]}")
+                CATEGORIAS_PRECARREGADAS_OK = False
+                return False
 
-        # 🔍 verifica se já existe
-        for cat in data:
-            if cat["name"].lower() == nome.lower():
-                CACHE_CATEGORIAS[nome] = cat["id"]
-                return cat["id"]
+            if not isinstance(data, list):
+                log("⚠️ pré-carga de categorias retornou formato inesperado.")
+                CATEGORIAS_PRECARREGADAS_OK = False
+                return False
 
-        # 🔥 cria categoria
-        r = woo_post(
-            URL_WOO_CAT,
-            headers=get_auth_headers(),
-            json={"name": nome},
-            timeout=REQUEST_TIMEOUT
-        )
+            for cat in data:
+                nome = cat.get("name")
+                cat_id = cat.get("id")
+                if nome and cat_id:
+                    # Mantém o primeiro ID encontrado para nomes duplicados,
+                    # reproduzindo de forma previsível a lógica antiga de busca exata.
+                    novas.setdefault(chave_categoria(nome), int(cat_id))
 
-        if r.status_code not in [200, 201]:
-            log(f"❌ erro criar categoria {nome} - {r.status_code} - {r.text[:100]}")
-            return None
+            total_paginas = inteiro_seguro(r.headers.get("X-WP-TotalPages"), 1) or 1
+            if pagina >= total_paginas or len(data) < 100:
+                break
+            pagina += 1
 
-        try:
-            cat_id = r.json()["id"]
-        except:
-            log(f"❌ erro JSON ao criar categoria {nome}: {r.text[:200]}")
-            return None
+        with LOCK_CATEGORIAS:
+            CACHE_CATEGORIAS.clear()
+            CACHE_CATEGORIAS.update(novas)
 
-        CACHE_CATEGORIAS[nome] = cat_id
-        return cat_id
+        CATEGORIAS_PRECARREGADAS_OK = True
+        log(f"🗂️ categorias Woo carregadas em memória: {len(novas)} nomes em {time.time()-inicio:.1f}s")
+        return True
 
     except Exception as e:
-        log(f"❌ erro categoria {nome}: {e}")
+        CATEGORIAS_PRECARREGADAS_OK = False
+        log(f"⚠️ não foi possível pré-carregar categorias Woo: {e}")
+        return False
+
+
+def get_or_create_category(nome):
+    """Resolve categoria usando cache; consulta/cria no Woo só se realmente não existir."""
+    if not nome:
         return None
+
+    chave = chave_categoria(nome)
+    with LOCK_CATEGORIAS:
+        if chave in CACHE_CATEGORIAS:
+            return CACHE_CATEGORIAS[chave]
+
+    # Lock serializa categorias desconhecidas e evita duas threads buscando/criando a mesma categoria.
+    with LOCK_CATEGORIAS:
+        if chave in CACHE_CATEGORIAS:
+            return CACHE_CATEGORIAS[chave]
+
+        try:
+            r = woo_get(
+                URL_WOO_CAT,
+                headers=get_auth_headers(),
+                params={"search": nome, "per_page": 100},
+                timeout=WOO_CATEGORIA_TIMEOUT
+            )
+
+            if r.status_code != 200:
+                log(f"❌ erro categoria {nome} - status {r.status_code} - {r.text[:100]}")
+                return None
+
+            try:
+                data = r.json()
+            except Exception:
+                log(f"❌ resposta não JSON categoria {nome}: {r.text[:200]}")
+                return None
+
+            for cat in data:
+                if str(cat.get("name", "")).casefold() == chave:
+                    CACHE_CATEGORIAS[chave] = int(cat["id"])
+                    return int(cat["id"])
+
+            r = woo_post(
+                URL_WOO_CAT,
+                headers=get_auth_headers(),
+                json={"name": nome},
+                timeout=WOO_CATEGORIA_TIMEOUT
+            )
+
+            if r.status_code not in [200, 201]:
+                log(f"❌ erro criar categoria {nome} - {r.status_code} - {r.text[:100]}")
+                return None
+
+            try:
+                cat_id = int(r.json()["id"])
+            except Exception:
+                log(f"❌ erro JSON ao criar categoria {nome}: {r.text[:200]}")
+                return None
+
+            CACHE_CATEGORIAS[chave] = cat_id
+            return cat_id
+
+        except Exception as e:
+            log(f"❌ erro categoria {nome}: {e}")
+            return None
 
 # ================= STATUS =================
 
@@ -853,14 +1027,24 @@ def enviar(prod, cache):
     stock_status_novo = "instock" if estoque_novo > 0 else "outofstock"
     imagens_novas = len(prod["imagens"])
 
-    cat_depto_id = get_or_create_category(prod["departamento"]) if prod["departamento"] else None
-    cat_sub_id = get_or_create_category(prod["categoria"]) if prod["categoria"] else None
-
+    # Categorias já vêm do cache carregado no início do ciclo.
+    # Se a API de categorias estiver indisponível, NÃO bloqueia atualização de produto existente.
+    cat_depto_id = None
+    cat_sub_id = None
     categorias = []
-    if cat_depto_id:
-        categorias.append({"id": cat_depto_id})
-    if cat_sub_id:
-        categorias.append({"id": cat_sub_id})
+
+    if CATEGORIAS_PRECARREGADAS_OK:
+        cat_depto_id = get_or_create_category(prod["departamento"]) if prod["departamento"] else None
+        cat_sub_id = get_or_create_category(prod["categoria"]) if prod["categoria"] else None
+        if cat_depto_id:
+            categorias.append({"id": cat_depto_id})
+        if cat_sub_id:
+            categorias.append({"id": cat_sub_id})
+    elif not prod_id:
+        # Produto novo sem acesso confiável às categorias: melhor tentar no próximo ciclo
+        # do que publicar incorretamente como Uncategorized.
+        log(f"⚠️ {prod['sku']} não criado agora - categorias Woo indisponíveis; será tentado novamente.")
+        return False
 
     # 🔥 IMAGENS - BLINDADO
     imagens_upload = []
@@ -910,9 +1094,13 @@ def enviar(prod, cache):
         "status": "publish",
         "description": prod.get("descricao_tecnica", ""),
         "short_description": prod.get("descricao_curta", ""),
-        "categories": categorias,
         "attributes": prod["atributos"]
     }
+
+    # Não envia categories=[] quando a API de categorias estiver ruim, pois isso
+    # poderia remover a categorização atual de um produto existente.
+    if categorias:
+        payload["categories"] = categorias
 
     # 🔥 só adiciona imagem se for produto novo E se tiver imagem válida
     if not prod_id and imagens_upload:
@@ -1012,6 +1200,12 @@ def executar():
             return
 
         lista = data.get("itens", [])
+
+        # Reinicia métricas de comunicação Woo por ciclo e carrega categorias UMA vez.
+        reset_woo_stats()
+        categorias_ok = carregar_categorias_woo()
+        if not categorias_ok:
+            log("⚠️ categorias Woo não foram pré-carregadas. Produtos existentes ainda podem atualizar sem regravar categorias; produtos novos serão protegidos contra criação sem categoria.")
 
         # SKUs que vieram na lista atual do fornecedor.
         # Usado no fim da execução para marcar como ESGOTADO no Woo
@@ -1208,6 +1402,17 @@ def executar():
         salvar_cache(cache)
         erros_ciclo = STATUS.get("erros", 0)
 
+        # Diagnóstico compacto de latência do Woo para o dashboard/log.
+        reqs = int(WOO_STATS.get("requests", 0) or 0)
+        if reqs:
+            media = WOO_STATS.get("tempo_total", 0.0) / reqs
+            log(
+                "🌐 Woo diagnóstico | "
+                f"requests={reqs} | sucesso={WOO_STATS.get('sucessos',0)} | "
+                f"falhas={WOO_STATS.get('falhas',0)} | lentas>={WOO_SLOW_REQUEST_SEGUNDOS}s={WOO_STATS.get('lentas',0)} | "
+                f"média={media:.2f}s | máxima={WOO_STATS.get('tempo_max',0.0):.2f}s"
+            )
+
         STATUS["rodando"] = False
         STATUS["tempo_restante"] = 0
 
@@ -1363,6 +1568,7 @@ def status():
 def health():
     return jsonify({
         "ok": True,
+        "versao": VERSAO_INTEGRADOR,
         "rodando": STATUS.get("rodando", False),
         "processados": STATUS.get("processados", 0),
         "total": STATUS.get("total", 0),
