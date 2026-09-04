@@ -1,4 +1,5 @@
 import requests
+import socket
 import threading
 import os
 import base64
@@ -1576,6 +1577,95 @@ def health():
         "hora_brasilia": agora_brasilia().strftime("%d/%m/%Y %H:%M:%S")
     })
 
+
+
+@app.route("/diagnostico-woo")
+def diagnostico_woo():
+    """
+    Diagnóstico SOMENTE LEITURA executado de dentro do Railway.
+    Mede DNS e tempo de resposta do site, REST API e Woo autenticado.
+    Não cria, altera nem exclui produtos.
+    """
+    resultado = {
+        "ok": True,
+        "somente_leitura": True,
+        "versao": VERSAO_INTEGRADOR,
+        "hora_brasilia": agora_brasilia().strftime("%d/%m/%Y %H:%M:%S"),
+        "host": "moveisdolar.com.br",
+        "dns": {},
+        "testes": []
+    }
+
+    inicio_dns = time.time()
+    try:
+        infos = socket.getaddrinfo("moveisdolar.com.br", 443, type=socket.SOCK_STREAM)
+        ips = []
+        for info in infos:
+            ip = info[4][0]
+            if ip not in ips:
+                ips.append(ip)
+        resultado["dns"] = {
+            "ok": True,
+            "tempo_s": round(time.time() - inicio_dns, 3),
+            "ips": ips
+        }
+    except Exception as e:
+        resultado["dns"] = {
+            "ok": False,
+            "tempo_s": round(time.time() - inicio_dns, 3),
+            "erro_tipo": type(e).__name__,
+            "erro": str(e)[:500]
+        }
+        resultado["ok"] = False
+
+    def testar(nome, url, autenticado=False, timeout=20):
+        inicio = time.time()
+        item = {
+            "nome": nome,
+            "url": url,
+            "autenticado": bool(autenticado),
+            "timeout_s": timeout
+        }
+        try:
+            headers = get_auth_headers() if autenticado else {"User-Agent": "MDL-Woo-Diagnostico/1.0"}
+            kwargs = {
+                "headers": headers,
+                "timeout": timeout,
+                "verify": VERIFY_SSL_WOO,
+                "allow_redirects": True,
+            }
+            if url == URL_WOO:
+                kwargs["params"] = {"per_page": 1}
+            r = requests.get(url, **kwargs)
+            item.update({
+                "ok_transporte": True,
+                "http": r.status_code,
+                "tempo_s": round(time.time() - inicio, 3),
+                "bytes": len(r.content or b""),
+                "server": r.headers.get("Server"),
+                "via": r.headers.get("Via"),
+                "cf_ray": r.headers.get("CF-RAY")
+            })
+        except Exception as e:
+            item.update({
+                "ok_transporte": False,
+                "tempo_s": round(time.time() - inicio, 3),
+                "erro_tipo": type(e).__name__,
+                "erro": str(e)[:800]
+            })
+            resultado["ok"] = False
+        resultado["testes"].append(item)
+
+    testar("home", "https://moveisdolar.com.br/", autenticado=False, timeout=20)
+    testar("wp_json", "https://moveisdolar.com.br/wp-json/", autenticado=False, timeout=20)
+    testar("woo_produtos_per_page_1", URL_WOO, autenticado=True, timeout=20)
+    testar("woo_produto_144", f"{URL_WOO}/144", autenticado=True, timeout=20)
+
+    tempos = [x.get("tempo_s") for x in resultado["testes"] if isinstance(x.get("tempo_s"), (int, float))]
+    if tempos:
+        resultado["tempo_total_testes_s"] = round(sum(tempos), 3)
+
+    return jsonify(resultado)
 
 @app.route("/hora")
 def hora():
